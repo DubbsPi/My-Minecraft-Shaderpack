@@ -157,7 +157,7 @@ vec4 ddaReflection(in vec3 rayOrigin, in vec3 rayDir, in vec3 lightDir) {
 			vec3 hitPos = rayOrigin + rayDir * tHit;
             vec3 screen = worldToScreen(hitPos);
             return vec4(texture(colortex0, screen.xy).rgb, 1);
-        }
+        } 
 	}
 	return vec4(0);
 }
