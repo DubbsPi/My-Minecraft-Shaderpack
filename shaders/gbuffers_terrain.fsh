@@ -24,9 +24,9 @@ void main() {
 		discard;
 	}
 
-	float reflectivity = 0.0;
-    if (blockType == 0) reflectivity = 1.0;
+	float reflective = 0.0;
+	if (blockType == 1) reflective = 1.0;
 
-    dataOut = vec4(lmcoord, reflectivity, 1);
+    dataOut = vec4(lmcoord, reflective, 1);
 	encodedNormal = vec4(normal * 0.5 + 0.5, 1);
 }

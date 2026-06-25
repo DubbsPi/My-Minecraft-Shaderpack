@@ -5,15 +5,17 @@ uniform sampler2D gtexture;
 
 uniform float alphaTestRef = 0.1;
 
+
 in vec2 texcoord;
 in vec4 glcolor;
+in vec3 worldPos;
+in float depth;
+
 
 layout(location = 0) out vec4 color;
 
 
 void main() {
-  color = texture(gtexture, texcoord) * glcolor;
-  if(color.a < alphaTestRef){
-    discard;
-  }
+    color = texture(gtexture, texcoord) * glcolor;
+    if (color.a < alphaTestRef) discard;
 }
