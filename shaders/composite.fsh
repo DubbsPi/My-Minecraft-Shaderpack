@@ -1,17 +1,18 @@
 #version 330 compatibility
 
 #include "/lib/util.glsl"
-#include "/lib/settings.glsl"
 
 
 uniform sampler2D colortex0;
 uniform sampler2D colortex1;
 uniform sampler2D colortex2;
+uniform sampler2D colortex3;
+uniform usampler2D colortex4;
 uniform sampler2D depthtex0;
 
 uniform sampler2D shadowtex0;
 uniform sampler2D shadowtex1;
-uniform sampler2D shadowcolor0;
+uniform usampler2D shadowcolor0;
 uniform sampler2D shadowcolor1;
 
 uniform sampler2D noisetex;
@@ -35,13 +36,23 @@ uniform float viewHeight;
 
 uniform float far;
 uniform int worldTime;
-
+uniform float fogDensity;
+uniform vec3 fogColor;
 
 in vec2 texcoord;
 
 
 /* RENDERTARGETS: 0 */
 layout(location = 0) out vec4 color;
+
+/*
+const int shadowcolor0Format = R16UI;
+const int colortex0Format  = RGBA16F;
+const int colortex1Format  = RGBA16F;
+const int colortex2Format  = RGBA16F;
+const int colortex3Format  = RGBA16F;
+const int colortex4Format  = R16UI;
+*/
 
 
 vec2 intersectSphere(in vec3 rayOrigin, in vec3 rayDir, in float radius) {
@@ -73,10 +84,8 @@ float opticalDepth(in vec3 pos, in vec3 dir, in float rayLength, in float scaleH
     return depth;
 }
 
-vec3 scatterAtmosphere(in vec3 viewDir, in vec3 sunDir, in vec3 moonDir, in vec3 playerPosWorld) {
-    vec3 origin = vec3(0, earthRadius + playerPosWorld.y * 0.01, 0);
-
-	if (viewDir.y < -0.15) return vec3(0);
+vec3 scatterAtmosphere(in vec3 viewDir, in vec3 sunDir, in vec3 moonDir, in vec3 worldPos) {
+    vec3 origin = vec3(0, earthRadius + worldPos.y * 0.01, 0);
 
     // Get the atmospheric exit
     vec2 atmoHit = intersectSphere(origin, viewDir, atmosphereRadius);
@@ -131,19 +140,14 @@ vec3 scatterAtmosphere(in vec3 viewDir, in vec3 sunDir, in vec3 moonDir, in vec3
         moonMieAccum += densM * moonTransmittance;
     }
 
-    vec3 skyColor = sunIntensity * (phaseRayleigh(mu) * betaRayleigh * sunRayleighAccum + phaseMie(mu) * betaMie * sunMieAccum);
-    skyColor += moonIntensity * (phaseRayleigh(mu) * betaRayleigh * moonRayleighAccum + phaseMie(mu) * betaMie * moonMieAccum);
-	return skyColor;
+    vec3 skyColor = 0.67 * sunIntensity * (phaseRayleigh(mu) * betaRayleigh * sunRayleighAccum + phaseMie(mu) * betaMie * sunMieAccum);
+    skyColor += 1.5 * moonIntensity * (phaseRayleigh(mu) * betaRayleigh * moonRayleighAccum + phaseMie(mu) * betaMie * moonMieAccum);
+    return skyColor;
 }
 
-vec3 getSky(in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 playerPosWorld) {
-	#ifdef CHEAP_SKY
-	#ifdef DEBANDING
-    float noise = texture(noisetex, abs(rayDir.xz * 5289034.8923 + frameTimeCounter)).r;  // For debanding
-    #else
-	float noise = 0.0;
-	#endif
-	float t = clamp(rayDir.y + noise * 0.02, 0.0, 1.0);
+vec3 getSky(in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 worldPos, in bool celestials) {
+	#ifdef CHEAP_SKY    
+	float t = clamp(rayDir.y, 0.0, 1.0);
     vec3 skyColor = mix(fogColor, fogColor * vec3(0.5, 0.5, 0.75), t);
     
     float sunAmount = pow(max(dot(rayDir, sunDir), 0.0), 64.0) * 0.1;
@@ -154,28 +158,26 @@ vec3 getSky(in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 playerPosWo
     return pow(skyColor * clamp(sunDir.y * 2.0, 0.0, 1.0), vec3(2.2));
 	
 	#else
-	// Debanding
-	#ifdef DEBANDING
-	vec3 skyColor = texture(noisetex, abs(rayDir.xz * 5289034.8923 + frameTimeCounter)).rgb * 0.005;
-	#else
-	vec3 skyColor = vec3(0);
-	#endif
-	skyColor += scatterAtmosphere(rayDir, sunDir, moonDir, playerPosWorld);
-	
-	float sunDisc = smoothstep(0.999, 1.0, dot(rayDir, sunDir));
-  	skyColor += 0.5 * sunIntensity * sunDisc * smoothstep(0.0, 1.0, sunDir.y);
-	float moonDisk = smoothstep(0.9995, 1.0, dot(rayDir, moonDir));
-  	skyColor += moonIntensity * moonDisk * smoothstep(0.0, 1.0, moonDir.y);
+	vec3 skyColor = scatterAtmosphere(rayDir, sunDir, moonDir, worldPos);
+    
+    if (celestials) {
+        float sunDisc = smoothstep(0.999, 1.0, dot(rayDir, sunDir));
+        skyColor += 0.5 * sunIntensity * sunDisc * smoothstep(0.0, 1.0, sunDir.y);
+        float moonDisk = smoothstep(0.9995, 1.0, dot(rayDir, moonDir));
+        skyColor += moonIntensity * moonDisk * smoothstep(0.0, 1.0, moonDir.y);
+    }
 
-	return skyColor;
+    float horizonBlend = smoothstep(-0.05, 0.05, rayDir.y);
+    vec3 brown = vec3(0.35, 0.275, 0.2) * fogColor;
+
+    if (rayDir.y > -0.15)
+	    return mix(brown, skyColor, horizonBlend);
+    else
+        return brown;
 	#endif
 }
 
-vec4 getNoise(in ivec2 pixel) {
-    ivec2 coord = pixel % 128;
-    return texelFetch(noisetex, coord, 0);
-}
-
+/*
 vec3 getShadow(in vec3 shadowScreenPos) {
     float transparentShadow = step(shadowScreenPos.z, texture(shadowtex0, shadowScreenPos.xy).r);
     if (transparentShadow == 1.0) return vec3(1);  // Fully sunlit
@@ -203,7 +205,7 @@ vec3 getSoftShadow(in vec4 shadowClipPos) {
     for (int x = -SHADOW_RANGE; x <= SHADOW_RANGE; x++) {
         for (int y = -SHADOW_RANGE; y <= SHADOW_RANGE; y++) {
             vec2 offset = vec2(x, y) * mult * rotation;
-            vec4 offsetShadowClipPos = shadowClipPos + vec4(offset, shadowBias, 0);
+            vec4 offsetShadowClipPos = shadowClipPos + vec4(offset, shadowBias * 5.0 * sqrt(dot(shadowClipPos.xy, shadowClipPos.xy)), 0);
             offsetShadowClipPos.xyz = distortShadowClip(offsetShadowClipPos.xyz);
             vec3 shadowNdcPos = offsetShadowClipPos.xyz / offsetShadowClipPos.w;
             vec3 shadowScreenPos = shadowNdcPos * 0.5 + 0.5;
@@ -212,13 +214,13 @@ vec3 getSoftShadow(in vec4 shadowClipPos) {
     }
     return shadowAccum * samplesMult;
 }
+*/
 
-vec3 ssr(in vec3 eyeRayOrigin, in vec3 eyeRayDir, in vec3 worldRayDir, in vec3 sunDir, in vec3 moonDir, in vec3 playerPosWorld) {
+vec3 ssr(in vec3 eyeRayOrigin, in vec3 eyeRayDir, in vec3 worldRayDir, in vec3 sunDir, in vec3 moonDir, in vec3 worldPos) {
 	// Rough search
 	bool hit = false;
-	float coarseStepSize = 0.75;
-	float coarseThickness = 0.85;
-	const int coarseSteps = 64;
+	float coarseStepSize = 0.85;
+	float coarseThickness = 0.95;
 	
 	float stepSize = coarseStepSize;
 	float thickness = coarseThickness;
@@ -251,13 +253,13 @@ vec3 ssr(in vec3 eyeRayOrigin, in vec3 eyeRayDir, in vec3 worldRayDir, in vec3 s
         }
     }
 
-	if (!hit) return getSky(worldRayDir, sunDir, moonDir, playerPosWorld);
+	if (!hit) return getSky(worldRayDir, sunDir, moonDir, worldPos, true);
 
 	// Fine search
 	float currentStep = coarseStepSize;
 	vec2 finalUv;
 
-	for (int i = 0; i < 12; i++) {
+	for (int i = 0; i < refiningSteps; i++) {
 		currentStep *= 0.5;
 
 		// Project to screen space
@@ -283,9 +285,20 @@ vec3 ssr(in vec3 eyeRayOrigin, in vec3 eyeRayDir, in vec3 worldRayDir, in vec3 s
 
 	// Final sky check
 	if (any(lessThan(finalUv, vec2(0.0))) || any(greaterThan(finalUv, vec2(1.0))))
-		return getSky(worldRayDir, sunDir, moonDir, playerPosWorld);
+		return getSky(worldRayDir, sunDir, moonDir, worldPos, true);
 	
 	return texture(colortex0, finalUv).rgb;
+}
+
+int getBlockId(vec3 worldPos) {
+    ivec2 uv = worldPosToVoxelTexel(worldPos, cameraPosition);
+    if (uv.x < 0) return -1;
+    uvec4 raw = texelFetch(shadowcolor0, uv, 0);
+    return int(raw.r);
+}
+
+vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 playerPos) {
+    return getSky(rayDir, sunDir, moonDir, playerPos, true);
 }
 
 
@@ -295,8 +308,10 @@ void main() {
     vec3 ndcPos  = vec3(texcoord.xy, depth) * 2.0 - 1.0;
     vec3 viewPos = projectAndDivide(gbufferProjectionInverse, ndcPos);
 
-	vec3 feetPosWorld = (gbufferModelViewInverse * vec4(viewPos, 1)).xyz;
-	vec3 playerPosWorld = feetPosWorld + cameraPosition;
+	vec3 playerPos = (gbufferModelViewInverse * vec4(viewPos, 1)).xyz;
+	vec3 worldPos = playerPos + cameraPosition;
+
+	vec3 skyDir = normalize(mat3(gbufferModelViewInverse) * viewPos);
 
     vec3 lightDir = mat3(gbufferModelViewInverse) * shadowLightPosition * 0.01;
 	vec3 sunDir  = mat3(gbufferModelViewInverse) * sunPosition * 0.01;
@@ -306,48 +321,68 @@ void main() {
 
     // Sky test
     if (depth == 1.0) {
-        vec3 skyDir = normalize(mat3(gbufferModelViewInverse) * viewPos);
-        color = vec4(getSky(skyDir, sunDir, moonDir, playerPosWorld), 1);
+        color = vec4(getSky(skyDir, sunDir, moonDir, worldPos, true), 1);
     } else {
         color = texture(colortex0, texcoord);
         color.rgb = pow(color.rgb, vec3(2.2));  // Convert to linear
 
+        vec4 specularSample = texture(colortex3, texcoord);
+
         vec4 data = texture(colortex1, texcoord);
+
+        int blockId = int(texture(colortex4, texcoord).r);
+
         vec2 lightmap = data.rg;
         vec3 encodedNormal = texture(colortex2, texcoord).rgb;
-        vec3 normal = normalize(encodedNormal - 0.5); // World-space normal
+        vec3 normal = normalize(encodedNormal - 0.5);  // World space normal
 
         vec3 blockLight = lightmap.r * blocklightColor;
         vec3 skyLight = lightmap.g * skylightColor * mix(0.01, 1.0, timeMod);
 
         // Shadow calculations
-        vec3 feetPlayerPos = (gbufferModelViewInverse * vec4(viewPos, 1)).xyz;
-        vec3 shadowViewPos = (shadowModelView * vec4(feetPlayerPos, 1)).xyz;
+        vec3 shadowViewPos = (shadowModelView * vec4(playerPos, 1)).xyz;
         vec4 shadowClipPos = shadowProjection * vec4(shadowViewPos, 1);
         
-        vec3 shadow   = getSoftShadow(shadowClipPos);
+        vec3 shadow   = vec3(1); //getSoftShadow(shadowClipPos);
         vec3 sunLight = sunlightColor * max(dot(lightDir, normal), 0.0) * shadow * mix(0.01, 1.0, timeMod);
 
         color.rgb *= blockLight + skyLight + sunLight;
 
-        float reflective = data.b;
-        if (reflective > 0.0) {
-            // Transform normal to eye space
-            vec3 viewNormal = mat3(gbufferModelView) * normal;
-            vec3 viewRayDir = reflect(normalize(viewPos), viewNormal);
-            
-            vec3 worldRayDir = mat3(gbufferModelViewInverse) * viewRayDir;
+        // LabPBR 1.3 stuff
+        float f0 = specularSample.r;
 
-            vec3 reflection = ssr(viewPos + viewNormal * 0.02, viewRayDir, worldRayDir, sunDir, moonDir, playerPosWorld);
-            color.rgb = mix(color.rgb, reflection.rgb * (blockLight + skyLight + sunLight), reflective);
+        bool isMetal = f0 >= 0.9;
+        float dielectric = isMetal ? 0.04 : f0 * 0.25444444444;
+
+        vec3 specularColor = isMetal ? color.rgb : vec3(dielectric);
+
+        if (max(specularColor.r, max(specularColor.g, specularColor.b)) > 0.01 && blockId > 0) {
+            // Transform normal to eye space
+            //vec3 viewNormal = mat3(gbufferModelView) * normal;
+            //vec3 viewRayDir = reflect(normalize(viewPos), viewNormal);
+            
+            //vec3 reflection = ssr(viewPos + viewNormal * 0.02, viewRayDir, skyDir, sunDir, moonDir, worldPos);
+
+            vec3 rayOrigin = worldPos + normal * 0.01;
+            vec3 rayDir = reflect(skyDir, normal);
+
+            vec3 reflection = wsr(rayOrigin, rayDir, sunDir, moonDir, playerPos);
+
+            color.rgb = mix(color.rgb, reflection.rgb, specularColor);
 		}
 
         float dist = length(viewPos) / far;
-        float fogFactor = exp(-FOG_DENSITY * (1.0 - dist));
+        float fogFactor = pow(dist, 2.0 / max(fogDensity, 0.1));
 
-		vec3 skyDir = normalize(mat3(gbufferModelViewInverse) * viewPos);
-
-        color.rgb = mix(color.rgb, getSky(skyDir, sunDir, moonDir, playerPosWorld), clamp(fogFactor, 0.0, 1.0));
+        color.rgb = mix(color.rgb, getSky(skyDir, sunDir, moonDir, worldPos, false), clamp(fogFactor, 0.0, 1.0));
     }
+
+    vec3 noise = texture(noisetex, texcoord * vec2(135.126, 290.297) + vec2(628.672, 338.945) * frameTimeCounter).rgb;
+    color.rgb += (noise - 0.5) * 0.004;
+
+    // Possible patch? Research needed
+    #if HDR_MOD_INSTALLED
+    #else
     color.rgb = pow(color.rgb, vec3(0.45454545454));  // Convert back to gamma space
+    #endif
 }

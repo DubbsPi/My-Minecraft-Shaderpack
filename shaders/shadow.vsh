@@ -3,24 +3,26 @@
 #include "/lib/util.glsl"
 
 
-uniform mat4 gbufferModelViewInverse;
-uniform mat4 shadowModelView;
-uniform mat4 shadowProjection;
+uniform mat4 shadowModelViewInverse;
+uniform vec3 cameraPosition;
 
+in vec4 mc_Entity;
 
 out vec2 texcoord;
 out vec4 glcolor;
-out float depth;
+out vec3 worldPos;
+flat out int blockId;
 
 
-void main() {
-    vec4 worldPos = gbufferModelViewInverse * gl_ModelViewMatrix * gl_Vertex;
-    vec4 lightSpacePos = shadowProjection * shadowModelView * worldPos;
-
-    depth = lightSpacePos.z / lightSpacePos.w * 0.5 + 0.5;
-    
+void main() {    
     texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
     glcolor = gl_Color;
+    blockId = int(mc_Entity.x);
+
+    vec3 shadowViewPos = (gl_ModelViewMatrix * gl_Vertex).xyz;
+    vec3 feetPlayerPos = (shadowModelViewInverse * vec4(shadowViewPos, 1)).xyz;
+    worldPos = feetPlayerPos + cameraPosition;
+
     gl_Position = ftransform();
-    gl_Position.xyz = distortShadowClip(gl_Position.xyz);
+    //gl_Position.xyz = distortShadowClip(gl_Position.xyz);
 }

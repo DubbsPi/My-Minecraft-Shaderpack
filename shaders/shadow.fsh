@@ -3,19 +3,19 @@
 
 uniform sampler2D gtexture;
 
-uniform float alphaTestRef = 0.1;
-
-
 in vec2 texcoord;
 in vec4 glcolor;
-in vec3 worldPos;
-in float depth;
+flat in int blockType;
 
 
-layout(location = 0) out vec4 color;
+layout(location = 0) out uvec4 color;
 
 
 void main() {
-    color = texture(gtexture, texcoord) * glcolor;
-    if (color.a < alphaTestRef) discard;
+    if (blockType <= 0) discard;
+
+    color = uvec4(uint(blockType), 0u, 0u, 1u);
+
+    //color = texture(gtexture, texcoord) * glcolor;
+    //if (color.a < alphaTestRef) discard;
 }

@@ -1,8 +1,5 @@
 #version 330 compatibility
 
-#include "/lib/util.glsl"
-#include "/lib/settings.glsl"
-
 
 uniform sampler2D lightmap;
 uniform sampler2D gtexture;
