@@ -1,4 +1,4 @@
-#version 330 compatibility
+#version 430 compatibility
 
 #include "/lib/util.glsl"
 
@@ -8,12 +8,17 @@ uniform sampler2D colortex1;
 uniform sampler2D colortex2;
 uniform sampler2D colortex3;
 uniform usampler2D colortex4;
+
+uniform sampler2D colortex10;
+uniform sampler2D colortex11;
+uniform sampler2D colortex12;
+
 uniform sampler2D depthtex0;
 
 uniform sampler2D shadowtex0;
 uniform sampler2D shadowtex1;
-uniform usampler2D shadowcolor0;
-uniform sampler2D shadowcolor1;
+
+uniform sampler2D shadowcolor0;
 
 uniform sampler2D noisetex;
 
@@ -45,14 +50,32 @@ in vec2 texcoord;
 /* RENDERTARGETS: 0 */
 layout(location = 0) out vec4 color;
 
+
 /*
-const int shadowcolor0Format = R16UI;
-const int colortex0Format  = RGBA16F;
-const int colortex1Format  = RGBA16F;
-const int colortex2Format  = RGBA16F;
-const int colortex3Format  = RGBA16F;
-const int colortex4Format  = R16UI;
+const int colortex0Format = RGBA16F;
+const int colortex1Format = RGBA16F;
+const int colortex2Format = RGBA16F;
+const int colortex3Format = RGBA16F;
+const int colortex4Format = R16UI;
+
+const int colortex10Format = RGBA8;
+const int colortex11sFormat = RGBA8;
+const int colortex12Format = RGBA8;
 */
+
+
+layout(std430, binding = 0) buffer voxelBuffer {
+	uvec4 voxels[];
+};
+
+
+struct hitInfo {
+    vec3 hitColor;
+    vec3 hitPos;
+    vec3 hitNormal;
+    vec2 hitUv;
+    bool hit;
+};
 
 
 vec2 intersectSphere(in vec3 rayOrigin, in vec3 rayDir, in float radius) {
@@ -177,7 +200,6 @@ vec3 getSky(in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 worldPos, i
 	#endif
 }
 
-/*
 vec3 getShadow(in vec3 shadowScreenPos) {
     float transparentShadow = step(shadowScreenPos.z, texture(shadowtex0, shadowScreenPos.xy).r);
     if (transparentShadow == 1.0) return vec3(1);  // Fully sunlit
@@ -195,7 +217,7 @@ vec3 getSoftShadow(in vec4 shadowClipPos) {
     const float samplesMult = 1.0 / float(SHADOW_RANGE * SHADOW_RANGE * 5);
     const float mult = SHADOW_RADIUS / float(SHADOW_RANGE) / float(shadowMapResolution);
 
-    float noise = getNoise(ivec2(texcoord * vec2(viewWidth, viewHeight))).r;
+    float noise = texture(noisetex, texcoord * vec2(3168.833, 2845.591)+ vec2(628.672, 338.945) * frameTimeCounter).r;
     float theta = noise * TAU;
     float cosTheta = cos(theta);
     float sinTheta = sin(theta);
@@ -205,7 +227,7 @@ vec3 getSoftShadow(in vec4 shadowClipPos) {
     for (int x = -SHADOW_RANGE; x <= SHADOW_RANGE; x++) {
         for (int y = -SHADOW_RANGE; y <= SHADOW_RANGE; y++) {
             vec2 offset = vec2(x, y) * mult * rotation;
-            vec4 offsetShadowClipPos = shadowClipPos + vec4(offset, shadowBias * 5.0 * sqrt(dot(shadowClipPos.xy, shadowClipPos.xy)), 0);
+            vec4 offsetShadowClipPos = shadowClipPos + vec4(offset, shadowBias - 0.01 * length(shadowClipPos.xy), 0);
             offsetShadowClipPos.xyz = distortShadowClip(offsetShadowClipPos.xyz);
             vec3 shadowNdcPos = offsetShadowClipPos.xyz / offsetShadowClipPos.w;
             vec3 shadowScreenPos = shadowNdcPos * 0.5 + 0.5;
@@ -214,7 +236,6 @@ vec3 getSoftShadow(in vec4 shadowClipPos) {
     }
     return shadowAccum * samplesMult;
 }
-*/
 
 vec3 ssr(in vec3 eyeRayOrigin, in vec3 eyeRayDir, in vec3 worldRayDir, in vec3 sunDir, in vec3 moonDir, in vec3 worldPos) {
 	// Rough search
@@ -290,15 +311,80 @@ vec3 ssr(in vec3 eyeRayOrigin, in vec3 eyeRayDir, in vec3 worldRayDir, in vec3 s
 	return texture(colortex0, finalUv).rgb;
 }
 
-int getBlockId(vec3 worldPos) {
-    ivec2 uv = worldPosToVoxelTexel(worldPos, cameraPosition);
-    if (uv.x < 0) return -1;
-    uvec4 raw = texelFetch(shadowcolor0, uv, 0);
-    return int(raw.r);
-}
 
-vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 playerPos) {
-    return getSky(rayDir, sunDir, moonDir, playerPos, true);
+hitInfo wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 playerPos) {
+    // DDA march
+    ivec3 origin = ivec3(floor(rayOrigin));
+    ivec3 voxel = origin;
+    ivec3 step  = ivec3(sign(rayDir));
+
+    vec3 tDelta = abs(1.0 / rayDir);
+    vec3 tMax = vec3(
+        (step.x > 0? voxel.x + 1.0 - rayOrigin.x : rayOrigin.x - voxel.x) / abs(rayDir.x),
+        (step.y > 0? voxel.y + 1.0 - rayOrigin.y : rayOrigin.y - voxel.y) / abs(rayDir.y),
+        (step.z > 0? voxel.z + 1.0 - rayOrigin.z : rayOrigin.z - voxel.z) / abs(rayDir.z)
+    );
+
+    vec3 hitNormal = vec3(0);
+    bool hit = false;
+    float tEntry = 0.0;
+
+    int blockId = 0;
+    int faceId = 0;
+    vec2 uvMin = vec2(0);
+    vec2 uvMax = vec2(0);
+    vec4 glcolor = vec4(0);
+    int face = 0;
+
+    for (int i = 0; i < WSR_STEPS; i++) {
+        if (tMax.x < tMax.y && tMax.x < tMax.z) {
+            tEntry = tMax.x;
+            voxel.x += step.x;
+            tMax.x  += tDelta.x;
+            hitNormal = vec3(-step.x, 0, 0);
+        } else if (tMax.y < tMax.z) {
+            tEntry = tMax.y;
+            voxel.y += step.y;
+            tMax.y  += tDelta.y;
+            hitNormal = vec3(0, -step.y, 0);
+        } else {
+            tEntry = tMax.z;
+            voxel.z += step.z;
+            tMax.z  += tDelta.z;
+            hitNormal = vec3(0, 0, -step.z);
+        }
+
+        face = getFaceIndex(hitNormal);
+
+        uint index = getVoxelIndex(voxel);
+        uint slot  = index * 6u + face;
+        uvec4 raw  = voxels[slot];
+
+        blockId = int(raw.x & 0xFFFFu);
+        faceId  = int((raw.x >> 16) & 0xFu);
+
+        if (isVoxelizable(blockId)) {
+            uvMin = unpackHalf2x16(raw.z);
+            uvMax = unpackHalf2x16(raw.w);
+            glcolor = unpackUnorm4x8(raw.y);
+
+            hit = true;
+            break;
+        }
+        if (any(greaterThan(abs(voxel - origin), vec3(VOXEL_RADIUS)))) {
+            hit = false;
+            break;
+        }
+    }
+
+    if (!hit) return hitInfo(getSky(rayDir, sunDir, moonDir, playerPos, true), vec3(0), vec3(0), vec2(0), false);
+    
+    vec3 hitPoint = rayOrigin + rayDir * tEntry;
+
+    vec2 uv = mix(uvMin, uvMax, getFaceUv(hitPoint, face));
+    vec3 color = pow(textureLod(colortex10, uv, 0.0).rgb, vec3(2.2));
+    
+    return hitInfo(color * glcolor.rgb, hitPoint, hitNormal, uv, true);
 }
 
 
@@ -343,7 +429,7 @@ void main() {
         vec3 shadowViewPos = (shadowModelView * vec4(playerPos, 1)).xyz;
         vec4 shadowClipPos = shadowProjection * vec4(shadowViewPos, 1);
         
-        vec3 shadow   = vec3(1); //getSoftShadow(shadowClipPos);
+        vec3 shadow   = getSoftShadow(shadowClipPos);
         vec3 sunLight = sunlightColor * max(dot(lightDir, normal), 0.0) * shadow * mix(0.01, 1.0, timeMod);
 
         color.rgb *= blockLight + skyLight + sunLight;
@@ -356,19 +442,48 @@ void main() {
 
         vec3 specularColor = isMetal ? color.rgb : vec3(dielectric);
 
-        if (max(specularColor.r, max(specularColor.g, specularColor.b)) > 0.01 && blockId > 0) {
+        if (max(specularColor.r, max(specularColor.g, specularColor.b)) > 0.01) {
+            /*
             // Transform normal to eye space
-            //vec3 viewNormal = mat3(gbufferModelView) * normal;
-            //vec3 viewRayDir = reflect(normalize(viewPos), viewNormal);
+            vec3 viewNormal = mat3(gbufferModelView) * normal;
+            vec3 viewRayDir = reflect(normalize(viewPos), viewNormal);
             
-            //vec3 reflection = ssr(viewPos + viewNormal * 0.02, viewRayDir, skyDir, sunDir, moonDir, worldPos);
+            vec3 reflection = ssr(viewPos + viewNormal * 0.02, viewRayDir, skyDir, sunDir, moonDir, worldPos);
+            */
 
             vec3 rayOrigin = worldPos + normal * 0.01;
             vec3 rayDir = reflect(skyDir, normal);
 
-            vec3 reflection = wsr(rayOrigin, rayDir, sunDir, moonDir, playerPos);
+            hitInfo reflection = wsr(rayOrigin, rayDir, sunDir, moonDir, playerPos);
 
-            color.rgb = mix(color.rgb, reflection.rgb, specularColor);
+            vec3 reflectionColor = reflection.hitColor;
+
+            if (reflection.hit) {
+                hitInfo prevReflection = reflection;
+                vec3 throughput = specularColor;
+                vec3 prevDir = rayDir;
+
+                for (int i = 0; i < 4; i++) {
+                    vec4 reflectSpec = texture(colortex11, prevReflection.hitUv);
+                    float f0r = reflectSpec.r;
+
+                    bool isMetalR = f0r >= 0.9;
+                    float dielectricR = isMetalR ? 0.04 : f0r * 0.25444444444;
+                    vec3 specularColorR = isMetalR ? color.rgb : vec3(dielectricR);
+                    
+                    if (max(specularColorR.r, max(specularColorR.g, specularColorR.b)) > 0.01 && max(throughput.r, max(throughput.g, throughput.b)) > 0.1) {
+                        vec3 rayOriginR = prevReflection.hitPos + prevReflection.hitNormal * 0.01;
+                        vec3 prevDir = reflect(prevDir, prevReflection.hitNormal);
+
+                        prevReflection = wsr(rayOriginR, prevDir, sunDir, moonDir, playerPos);
+                        reflectionColor += prevReflection.hitColor * specularColorR;
+
+                        throughput *= specularColorR;
+                    } else break;
+                }
+            }
+
+            color.rgb += reflectionColor * specularColor;
 		}
 
         float dist = length(viewPos) / far;

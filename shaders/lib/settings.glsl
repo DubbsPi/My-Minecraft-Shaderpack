@@ -5,6 +5,7 @@
 #define SKY_LIGHT_SAMPLES 8
 
 //#define CHEAP_SKY
+//#define SSR
 
 // Voxel stuff in util.glsl
 
@@ -15,7 +16,6 @@ const bool shadowtex0Nearest = true;
 const bool shadowtex1Nearest = true;
 const bool shadowcolor0Nearest = true;
 
-const int shadowMapResolution = 4096;
 const float shadowDistanceRenderMul = 1.0;
 
 const float shadowBias = -0.001;

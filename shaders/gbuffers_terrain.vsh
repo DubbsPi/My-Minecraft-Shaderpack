@@ -9,14 +9,15 @@ uniform vec3 cameraPosition;
 
 uniform float frameTimeCounter;
 
-attribute vec4 mc_Entity;
+in vec4 mc_Entity;
 
 
 out vec2 lmcoord;
 out vec2 texcoord;
 out vec4 glcolor;
 out vec3 normal;
-flat out float blockType;
+out vec3 worldPos;
+flat out int blockId;
 
 
 void main() {
@@ -24,7 +25,11 @@ void main() {
 	lmcoord = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy * 1.066666667 - 0.03125;
 	glcolor = gl_Color;
 	normal = mat3(gbufferModelViewInverse) * gl_NormalMatrix * gl_Normal;
-	blockType = int(mc_Entity.x);
+	blockId = int(mc_Entity.x);
+
+	vec3 blockViewPos = (gl_ModelViewMatrix * gl_Vertex).xyz;
+    vec3 feetPlayerPos = (gbufferModelViewInverse * vec4(blockViewPos, 1)).xyz;
+    worldPos = feetPlayerPos + cameraPosition;
 
     vec4 vertexPos = gl_Vertex;
     gl_Position = gl_ModelViewProjectionMatrix * vertexPos;
