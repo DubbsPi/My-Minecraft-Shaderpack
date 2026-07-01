@@ -69,15 +69,6 @@ layout(std430, binding = 0) buffer voxelBuffer {
 };
 
 
-struct hitInfo {
-    vec3 hitColor;
-    vec3 hitPos;
-    vec3 hitNormal;
-    vec2 hitUv;
-    bool hit;
-};
-
-
 vec2 intersectSphere(in vec3 rayOrigin, in vec3 rayDir, in float radius) {
     float b = dot(rayOrigin, rayDir);
     float c = dot(rayOrigin, rayOrigin) - radius * radius;
@@ -312,7 +303,7 @@ vec3 ssr(in vec3 eyeRayOrigin, in vec3 eyeRayDir, in vec3 worldRayDir, in vec3 s
 }
 
 
-hitInfo wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 playerPos) {
+vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 playerPos) {
     // DDA march
     ivec3 origin = ivec3(floor(rayOrigin));
     ivec3 voxel = origin;
@@ -377,14 +368,14 @@ hitInfo wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, 
         }
     }
 
-    if (!hit) return hitInfo(getSky(rayDir, sunDir, moonDir, playerPos, true), vec3(0), vec3(0), vec2(0), false);
+    if (!hit) return getSky(rayDir, sunDir, moonDir, playerPos, true);
     
     vec3 hitPoint = rayOrigin + rayDir * tEntry;
 
     vec2 uv = mix(uvMin, uvMax, getFaceUv(hitPoint, face));
     vec3 color = pow(textureLod(colortex10, uv, 0.0).rgb, vec3(2.2));
     
-    return hitInfo(color * glcolor.rgb, hitPoint, hitNormal, uv, true);
+    return color * glcolor.rgb;
 }
 
 
@@ -442,49 +433,32 @@ void main() {
 
         vec3 specularColor = isMetal ? color.rgb : vec3(dielectric);
 
+        #if defined(SSR) || defined(WSR)
         if (max(specularColor.r, max(specularColor.g, specularColor.b)) > 0.01) {
-            /*
+            vec3 reflection = vec3(0);
+
+            #ifdef SSR
             // Transform normal to eye space
             vec3 viewNormal = mat3(gbufferModelView) * normal;
             vec3 viewRayDir = reflect(normalize(viewPos), viewNormal);
             
-            vec3 reflection = ssr(viewPos + viewNormal * 0.02, viewRayDir, skyDir, sunDir, moonDir, worldPos);
-            */
+            reflection = ssr(viewPos + viewNormal * 0.02, viewRayDir, skyDir, sunDir, moonDir, worldPos);
+            #endif
 
+            #ifdef WSR
             vec3 rayOrigin = worldPos + normal * 0.01;
             vec3 rayDir = reflect(skyDir, normal);
 
-            hitInfo reflection = wsr(rayOrigin, rayDir, sunDir, moonDir, playerPos);
+            #ifdef SSR
+            reflection = max(reflection, wsr(rayOrigin, rayDir, sunDir, moonDir, playerPos));
+            #else
+            reflection = wsr(rayOrigin, rayDir, sunDir, moonDir, playerPos);
+            #endif
+            #endif
 
-            vec3 reflectionColor = reflection.hitColor;
-
-            if (reflection.hit) {
-                hitInfo prevReflection = reflection;
-                vec3 throughput = specularColor;
-                vec3 prevDir = rayDir;
-
-                for (int i = 0; i < 4; i++) {
-                    vec4 reflectSpec = texture(colortex11, prevReflection.hitUv);
-                    float f0r = reflectSpec.r;
-
-                    bool isMetalR = f0r >= 0.9;
-                    float dielectricR = isMetalR ? 0.04 : f0r * 0.25444444444;
-                    vec3 specularColorR = isMetalR ? color.rgb : vec3(dielectricR);
-                    
-                    if (max(specularColorR.r, max(specularColorR.g, specularColorR.b)) > 0.01 && max(throughput.r, max(throughput.g, throughput.b)) > 0.1) {
-                        vec3 rayOriginR = prevReflection.hitPos + prevReflection.hitNormal * 0.01;
-                        vec3 prevDir = reflect(prevDir, prevReflection.hitNormal);
-
-                        prevReflection = wsr(rayOriginR, prevDir, sunDir, moonDir, playerPos);
-                        reflectionColor += prevReflection.hitColor * specularColorR;
-
-                        throughput *= specularColorR;
-                    } else break;
-                }
-            }
-
-            color.rgb += reflectionColor * specularColor;
+            color.rgb += reflection * specularColor;
 		}
+        #endif
 
         float dist = length(viewPos) / far;
         float fogFactor = pow(dist, 2.0 / max(fogDensity, 0.1));

@@ -6,6 +6,7 @@
 
 //#define CHEAP_SKY
 //#define SSR
+#define WSR
 
 // Voxel stuff in util.glsl
 
