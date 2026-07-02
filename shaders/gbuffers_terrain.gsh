@@ -23,7 +23,10 @@ flat out int blockType;
 
 
 layout(std430, binding = 0) buffer voxelBuffer {
-	uvec4 voxels[];
+	uint voxels[];
+};
+layout(std430, binding = 1) buffer faceBuffer {
+	uvec3 faces[];
 };
 
 
@@ -36,19 +39,18 @@ void main() {
         vec3 insetPos = center - sNormal * 0.5;
 
         ivec3 voxelPos = ivec3(floor(insetPos));
-
         if (all(lessThan(abs(voxelPos - ivec3(cameraPosition)), ivec3(VOXEL_RADIUS)))) {
             uint index = getVoxelIndex(voxelPos);
-            uint slot = index * 6u + uint(getFaceIndex(sNormal));
+            uint face = getFaceIndex(sNormal);
+            uint slot = index * 6u + face;
 
-            // Idk how this idea was ever thought up by gemini to compress stuff this much
-            uint packedData  = uint(blockType) | (uint(getFaceIndex(sNormal)) << 16);
             uint packedColor = packUnorm4x8((glcolor[0] + glcolor[1] + glcolor[2]) * 0.33333333);
 
             vec2 uvMin = min(texcoord[0], min(texcoord[1], texcoord[2]));
             vec2 uvMax = max(texcoord[0], max(texcoord[1], texcoord[2]));
 
-            voxels[slot] = uvec4(packedData, packedColor, packHalf2x16(uvMin), packHalf2x16(uvMax));
+            voxels[index] = uint(blockType);
+            faces[slot] = uvec3(packedColor, packHalf2x16(uvMin), packHalf2x16(uvMax));
         }
     }
 

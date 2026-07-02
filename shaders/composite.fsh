@@ -65,7 +65,10 @@ const int colortex12Format = RGBA8;
 
 
 layout(std430, binding = 0) buffer voxelBuffer {
-	uvec4 voxels[];
+	uint voxels[];
+};
+layout(std430, binding = 1) buffer faceBuffer {
+	uvec3 faces[];
 };
 
 
@@ -321,11 +324,7 @@ vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in 
     float tEntry = 0.0;
 
     int blockId = 0;
-    int faceId = 0;
-    vec2 uvMin = vec2(0);
-    vec2 uvMax = vec2(0);
-    vec4 glcolor = vec4(0);
-    int face = 0;
+    uint index = 0;
 
     for (int i = 0; i < WSR_STEPS; i++) {
         if (tMax.x < tMax.y && tMax.x < tMax.z) {
@@ -345,20 +344,10 @@ vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in 
             hitNormal = vec3(0, 0, -step.z);
         }
 
-        face = getFaceIndex(hitNormal);
-
-        uint index = getVoxelIndex(voxel);
-        uint slot  = index * 6u + face;
-        uvec4 raw  = voxels[slot];
-
-        blockId = int(raw.x & 0xFFFFu);
-        faceId  = int((raw.x >> 16) & 0xFu);
+        index = getVoxelIndex(voxel);
+        blockId = int(voxels[index]);
 
         if (isVoxelizable(blockId)) {
-            uvMin = unpackHalf2x16(raw.z);
-            uvMax = unpackHalf2x16(raw.w);
-            glcolor = unpackUnorm4x8(raw.y);
-
             hit = true;
             break;
         }
@@ -370,6 +359,14 @@ vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in 
 
     if (!hit) return getSky(rayDir, sunDir, moonDir, playerPos, true);
     
+    int face = getFaceIndex(hitNormal);
+    uint slot = index * 6u + face;
+    uvec3 rawc = faces[slot];
+
+    vec2 uvMin = unpackHalf2x16(rawc.y);
+    vec2 uvMax = unpackHalf2x16(rawc.z);
+    vec4 glcolor = unpackUnorm4x8(rawc.x);
+
     vec3 hitPoint = rayOrigin + rayDir * tEntry;
 
     vec2 uv = mix(uvMin, uvMax, getFaceUv(hitPoint, face));

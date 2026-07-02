@@ -5,7 +5,7 @@
 
 #define VOXEL_RADIUS 128
 #define DOUBLE_VOXEL_RADIUS VOXEL_RADIUS * 2
-#define WSR_STEPS int(ceil(float(VOXEL_RADIUS) * sqrt(3.0)))
+#define WSR_STEPS VOXEL_RADIUS
 
 const int shadowMapResolution = 4096;
 
@@ -68,4 +68,8 @@ vec2 getFaceUv(in vec3 hitPoint, in int face) {
 
 bool isVoxelizable(in int blockId) {
     return (blockId >= 10000 && blockId <= 10430);
+}
+
+bool isTransparent(in int blockId) {
+    return (blockId >= 11030 && blockId <= 11104);
 }
