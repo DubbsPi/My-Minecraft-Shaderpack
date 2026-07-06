@@ -7,11 +7,12 @@ uniform sampler2D colortex0;
 uniform sampler2D colortex1;
 uniform sampler2D colortex2;
 uniform sampler2D colortex3;
-uniform usampler2D colortex4;
 
 uniform sampler2D colortex10;
 uniform sampler2D colortex11;
 uniform sampler2D colortex12;
+
+uniform sampler2D entityAtlas;
 
 uniform sampler2D depthtex0;
 
@@ -53,22 +54,25 @@ layout(location = 0) out vec4 color;
 
 /*
 const int colortex0Format = RGBA16F;
-const int colortex1Format = RGBA16F;
-const int colortex2Format = RGBA16F;
-const int colortex3Format = RGBA16F;
+const int colortex1Format = RGBA8;
+const int colortex2Format = RGBA8;
+const int colortex3Format = RGBA8;
 const int colortex4Format = R16UI;
 
+const int entityAtlas = RGBA8;
+
 const int colortex10Format = RGBA8;
-const int colortex11sFormat = RGBA8;
+const int colortex11Format = RGBA8;
 const int colortex12Format = RGBA8;
 */
 
 
-layout(std430, binding = 0) buffer voxelBuffer {
-	uint voxels[];
+layout(std430, binding = 4) buffer BakedSlots {
+    uint entityTriCount;
+    uint freeSlots[1024];
 };
-layout(std430, binding = 1) buffer faceBuffer {
-	uvec3 faces[];
+layout(std430, binding = 3) buffer Triangles {
+    Triangle entityTriangles[MAX_ENTITY_TRIANGLES];
 };
 
 
@@ -305,74 +309,106 @@ vec3 ssr(in vec3 eyeRayOrigin, in vec3 eyeRayDir, in vec3 worldRayDir, in vec3 s
 	return texture(colortex0, finalUv).rgb;
 }
 
+bool intersectTri(in vec3 rayOrigin, in vec3 rayDir, in mat3 vertices, out vec3 uvt) {
+    vec3 e1 = vertices[1] - vertices[0];
+    vec3 e2 = vertices[2] - vertices[0];
 
-vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 playerPos) {
-    // DDA march
-    ivec3 origin = ivec3(floor(rayOrigin));
-    ivec3 voxel = origin;
-    ivec3 step  = ivec3(sign(rayDir));
+    vec3 normal = cross(e1, e2);
+    if (dot(normal, rayDir) > 0.0) return false;
 
-    vec3 tDelta = abs(1.0 / rayDir);
-    vec3 tMax = vec3(
-        (step.x > 0? voxel.x + 1.0 - rayOrigin.x : rayOrigin.x - voxel.x) / abs(rayDir.x),
-        (step.y > 0? voxel.y + 1.0 - rayOrigin.y : rayOrigin.y - voxel.y) / abs(rayDir.y),
-        (step.z > 0? voxel.z + 1.0 - rayOrigin.z : rayOrigin.z - voxel.z) / abs(rayDir.z)
-    );
+    vec3 perp = cross(rayDir, e2);
+    float det = dot(e1, perp);
 
-    vec3 hitNormal = vec3(0);
-    bool hit = false;
-    float tEntry = 0.0;
+    if (abs(det) < epsilon) return false;
 
-    int blockId = 0;
-    uint index = 0;
+    float invDet = 1.0 / det;
+    
+    vec3 tVec = rayOrigin - vertices[0];
+    uvt.x = dot(tVec, perp) * invDet;
+    if (uvt.x < 0.0 || uvt.x > 1.0) return false;
 
-    for (int i = 0; i < WSR_STEPS; i++) {
-        if (tMax.x < tMax.y && tMax.x < tMax.z) {
-            tEntry = tMax.x;
-            voxel.x += step.x;
-            tMax.x  += tDelta.x;
-            hitNormal = vec3(-step.x, 0, 0);
-        } else if (tMax.y < tMax.z) {
-            tEntry = tMax.y;
-            voxel.y += step.y;
-            tMax.y  += tDelta.y;
-            hitNormal = vec3(0, -step.y, 0);
-        } else {
-            tEntry = tMax.z;
-            voxel.z += step.z;
-            tMax.z  += tDelta.z;
-            hitNormal = vec3(0, 0, -step.z);
-        }
+    vec3 qVec = cross(tVec, e1);
+    uvt.y = dot(rayDir, qVec) * invDet;
+    if (uvt.y < 0.0 || uvt.x + uvt.y > 1.0) return false;
 
-        index = getVoxelIndex(voxel);
-        blockId = int(voxels[index]);
+    uvt.z = dot(e2, qVec) * invDet;
+    return uvt.z > epsilon;
+}
 
-        if (isVoxelizable(blockId)) {
-            hit = true;
-            break;
-        }
-        if (any(greaterThan(abs(voxel - origin), vec3(VOXEL_RADIUS)))) {
-            hit = false;
-            break;
+vec3 trace(in vec3 rayOrigin, in vec3 rayDir, out Triangle tri) {
+    vec2 uv = vec2(-1);
+    float t = -1.0;
+
+    for (int i = 0; i < min(entityTriCount, MAX_ENTITY_TRIANGLES); i++) {
+        Triangle temp = entityTriangles[i];
+        vec3 uvt = vec3(-1);
+        mat3 vertices = mat3(temp.v0 + cameraPosition, temp.v1 + cameraPosition, temp.v2 + cameraPosition);
+        bool hit = intersectTri(rayOrigin, rayDir, vertices, uvt);
+
+        if (hit && (uvt.z < t || t < -0.5)) {
+            tri = temp;
+            uv = uvt.xy;
+            t  = uvt.z;
         }
     }
+    return vec3(uv, t);
+}
 
-    if (!hit) return getSky(rayDir, sunDir, moonDir, playerPos, true);
+vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 playerPos) {
+    vec2 uv = vec2(-1);
+    float t = -1.0;
+    Triangle tri;
+
+    vec3 uvt = trace(rayOrigin, rayDir, tri);
+    uv = uvt.xy;
+    t  = uvt.z;
+
+    if (t < 0.0) return getSky(rayDir, sunDir, moonDir, playerPos, true);
+
+    vec3 e1 = tri.v1 - tri.v0;
+    vec3 e2 = tri.v2 - tri.v0;
+    vec3 normal = normalize(cross(e1, e2));
+
+    vec3 hitPos = rayOrigin + rayDir * t;
     
-    int face = getFaceIndex(hitNormal);
-    uint slot = index * 6u + face;
-    uvec3 rawc = faces[slot];
+    // Interpolate uv between vertices
+    vec2 triUv = tri.uv0 * (1.0 - uv.x - uv.y) + tri.uv1 * uv.x + tri.uv2 * uv.y;
 
-    vec2 uvMin = unpackHalf2x16(rawc.y);
-    vec2 uvMax = unpackHalf2x16(rawc.z);
-    vec4 glcolor = unpackUnorm4x8(rawc.x);
+    ivec2 pos = slotToTexel(tri.id);
+    ivec2 texel = clamp(ivec2(triUv * tri.texSize), ivec2(0), tri.texSize - 1);
 
-    vec3 hitPoint = rayOrigin + rayDir * tEntry;
+    vec4 color = texelFetch(entityAtlas, pos + texel, 0);
+    float alpha = color.a;
 
-    vec2 uv = mix(uvMin, uvMax, getFaceUv(hitPoint, face));
-    vec3 color = pow(textureLod(colortex10, uv, 0.0).rgb, vec3(2.2));
+    if (alpha != 1.0) {
+        for (int i = 0; i < MAX_REFLECTION_TRANSPARENCY_LAYERS; i++) {
+            uvt = trace(hitPos - normal * 0.0001, rayDir, tri);
+            uv = uvt.xy;
+            t  = uvt.z;
+
+            if (t < -0.5) {
+                color.rgb = mix(getSky(rayDir, sunDir, moonDir, playerPos, true), color.rgb, color.a);
+                alpha = 1.0;
+            } else {
+                e1 = tri.v1 - tri.v0;
+                e2 = tri.v2 - tri.v0;
+                normal = normalize(cross(e1, e2));
+                
+                hitPos = hitPos + rayDir * t;
+
+                triUv = tri.uv0 * (1.0 - uv.x - uv.y) + tri.uv1 * uv.x + tri.uv2 * uv.y;
+                pos = slotToTexel(tri.id);
+                texel = clamp(ivec2(triUv * tri.texSize), ivec2(0), tri.texSize - 1);
+
+                vec4 newCol = texelFetch(entityAtlas, pos + texel, 0);
+                color.rgb = mix(newCol.rgb, color.rgb, alpha);
+                alpha = newCol.a;
+            }
+            if (alpha == 1.0) break;
+        }
+    }
     
-    return color * glcolor.rgb;
+    return color.rgb;
 }
 
 
@@ -404,8 +440,6 @@ void main() {
 
         vec4 data = texture(colortex1, texcoord);
 
-        int blockId = int(texture(colortex4, texcoord).r);
-
         vec2 lightmap = data.rg;
         vec3 encodedNormal = texture(colortex2, texcoord).rgb;
         vec3 normal = normalize(encodedNormal - 0.5);  // World space normal
@@ -433,7 +467,7 @@ void main() {
         #if defined(SSR) || defined(WSR)
         if (max(specularColor.r, max(specularColor.g, specularColor.b)) > 0.01) {
             vec3 reflection = vec3(0);
-
+            
             #ifdef SSR
             // Transform normal to eye space
             vec3 viewNormal = mat3(gbufferModelView) * normal;
@@ -463,8 +497,10 @@ void main() {
         color.rgb = mix(color.rgb, getSky(skyDir, sunDir, moonDir, worldPos, false), clamp(fogFactor, 0.0, 1.0));
     }
 
-    vec3 noise = texture(noisetex, texcoord * vec2(135.126, 290.297) + vec2(628.672, 338.945) * frameTimeCounter).rgb;
-    color.rgb += (noise - 0.5) * 0.004;
+    float normalized = float(entityTriCount) / float(MAX_ENTITY_TRIANGLES);
+    if (gl_FragCoord.x < normalized * viewWidth && gl_FragCoord.y < 20) {
+        color.rgb = vec3(normalized, 1.0 - normalized, 0.0);
+    }
 
     // Possible patch? Research needed
     #if HDR_MOD_INSTALLED

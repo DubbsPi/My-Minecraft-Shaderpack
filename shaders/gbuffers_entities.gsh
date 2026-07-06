@@ -41,7 +41,7 @@ uint getId() {
         uint c = packUnorm4x8(textureLod(gtexture, taps[i], 4.0));
         h = (h ^ c) * 16777619u;
     }
-    return h;
+    return h % 1024u;
 }
 
 void emitTriangle(in vec3 v0, in vec3 v1, in vec3 v2, in vec2 uv0, in vec2 uv1, in vec2 uv2, in uint id) {
@@ -63,11 +63,29 @@ void emitTriangle(in vec3 v0, in vec3 v1, in vec3 v2, in vec2 uv0, in vec2 uv1, 
     triangles[slot] = t;
 }
 
+void bakeTexture(in int slot) {
+    const int slotsPerRow = int(floor(ENTITY_ATLAS_SIZE / ENTITY_ATLAS_SLOT_SIZE));
+    ivec2 pos = ivec2(slot % slotsPerRow, slot / slotsPerRow) * ENTITY_ATLAS_SLOT_SIZE;
+    ivec2 texSize = min(textureSize(gtexture, 0), ivec2(ENTITY_ATLAS_SLOT_SIZE));
+
+    for (int x = 0; x < texSize.x; x++) {
+        for (int y = 0; y < texSize.y; y++) {
+            imageStore(entityatlas, pos + ivec2(x, y), texelFetch(gtexture, ivec2(x, y), 0));
+        }
+    }
+}
+
 
 void main() {
-    //uint id = getId();
-    //emitTriangle(worldPos[0], worldPos[1], worldPos[2], texcoord[0], texcoord[1], texcoord[2], id);
+    uint id = getId();
+    emitTriangle(worldPos[0], worldPos[1], worldPos[2], texcoord[0], texcoord[1], texcoord[2], id);
     
+    if (freeSlots[id] == 0u) {
+        if (atomicCompSwap(freeSlots[id], 0u, 1u) == 0u) {
+            bakeTexture(int(id));
+        }
+    }
+
     for (int i = 0; i < 3; i++) {
         gl_Position = gl_in[i].gl_Position;
         texCoord = texcoord[i];
