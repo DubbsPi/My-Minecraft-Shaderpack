@@ -24,7 +24,7 @@
 #define FXAA
 #define EDGE_THRESHOLD_MIN 0.0312
 #define EDGE_THRESHOLD_MAX 0.125
-#define ITERATIONS 8
+#define ITERATIONS 12
 #define SUBPIXEL_QUALITY 0.75
 #define QUALITY(i) ((i) < 5 ? 1.0 : ((i) == 5 ? 1.5 : ((i) < 10 ? 2.0 : ((i) == 10 ? 4.0 : 8.0))))
 

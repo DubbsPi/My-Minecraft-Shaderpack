@@ -10,6 +10,13 @@
 const int shadowMapResolution = 4096;
 
 
+struct RawVertex {
+    vec3 pos;
+    vec3 normal;
+    vec2 uv;
+    uint id;
+};
+
 struct Triangle {
     vec3 v0;
     vec3 v1;
@@ -19,16 +26,6 @@ struct Triangle {
     vec2 uv2;
     uint id;
     ivec2 texSize;
-};
-
-struct InternalNode {
-    int left;
-    int right;
-    int isLeftLeaf;
-    int isRightLeaf;
-    int parent;
-    vec3 bboxMin;
-    vec3 bboxMax;
 };
 
 

@@ -8,7 +8,6 @@ out vec2 texcoord;
 out vec2 lmcoord;
 out vec4 glcolor;
 out vec3 normal;
-out vec3 worldPos;
 
 
 void main() {
@@ -20,7 +19,7 @@ void main() {
     
     vec3 blockViewPos = (gl_ModelViewMatrix * gl_Vertex).xyz;
     vec3 feetPlayerPos = (gbufferModelViewInverse * vec4(blockViewPos, 1)).xyz;
-    worldPos = feetPlayerPos + cameraPosition;
+    vec3 worldPos = feetPlayerPos + cameraPosition;
     
     gl_Position = ftransform();
 }

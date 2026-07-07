@@ -52,6 +52,17 @@ in vec2 texcoord;
 layout(location = 0) out vec4 color;
 
 
+layout(std430, binding = 1) buffer EntityBuffer {
+    uint triCount;
+    uint vertexCount;
+    uint textureHashes[1024];
+    ivec2 texSize[1024];
+} entities;
+layout(std430, binding = 2) buffer EntityTris {
+    Triangle triangles[MAX_ENTITY_TRIANGLES];
+} entityTris;
+
+
 /*
 const int colortex0Format = RGBA16F;
 const int colortex1Format = RGBA8;
@@ -65,15 +76,6 @@ const int colortex10Format = RGBA8;
 const int colortex11Format = RGBA8;
 const int colortex12Format = RGBA8;
 */
-
-
-layout(std430, binding = 4) buffer BakedSlots {
-    uint entityTriCount;
-    uint freeSlots[1024];
-};
-layout(std430, binding = 3) buffer Triangles {
-    Triangle entityTriangles[MAX_ENTITY_TRIANGLES];
-};
 
 
 vec2 intersectSphere(in vec3 rayOrigin, in vec3 rayDir, in float radius) {
@@ -182,7 +184,7 @@ vec3 getSky(in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 worldPos, i
 	vec3 skyColor = scatterAtmosphere(rayDir, sunDir, moonDir, worldPos);
     
     if (celestials) {
-        float sunDisc = smoothstep(0.999, 1.0, dot(rayDir, sunDir));
+        float sunDisc = smoothstep(0.99925, 1.0, dot(rayDir, sunDir));
         skyColor += 0.5 * sunIntensity * sunDisc * smoothstep(0.0, 1.0, sunDir.y);
         float moonDisk = smoothstep(0.9995, 1.0, dot(rayDir, moonDir));
         skyColor += moonIntensity * moonDisk * smoothstep(0.0, 1.0, moonDir.y);
@@ -313,9 +315,6 @@ bool intersectTri(in vec3 rayOrigin, in vec3 rayDir, in mat3 vertices, out vec3 
     vec3 e1 = vertices[1] - vertices[0];
     vec3 e2 = vertices[2] - vertices[0];
 
-    vec3 normal = cross(e1, e2);
-    if (dot(normal, rayDir) > 0.0) return false;
-
     vec3 perp = cross(rayDir, e2);
     float det = dot(e1, perp);
 
@@ -339,8 +338,8 @@ vec3 trace(in vec3 rayOrigin, in vec3 rayDir, out Triangle tri) {
     vec2 uv = vec2(-1);
     float t = -1.0;
 
-    for (int i = 0; i < min(entityTriCount, MAX_ENTITY_TRIANGLES); i++) {
-        Triangle temp = entityTriangles[i];
+    for (int i = 0; i < min(entities.triCount, MAX_ENTITY_TRIANGLES); i++) {
+        Triangle temp = entityTris.triangles[i];
         vec3 uvt = vec3(-1);
         mat3 vertices = mat3(temp.v0 + cameraPosition, temp.v1 + cameraPosition, temp.v2 + cameraPosition);
         bool hit = intersectTri(rayOrigin, rayDir, vertices, uvt);
@@ -354,7 +353,7 @@ vec3 trace(in vec3 rayOrigin, in vec3 rayDir, out Triangle tri) {
     return vec3(uv, t);
 }
 
-vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 playerPos) {
+vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 playerPos, in vec3 lightDir, in float timeMod) {
     vec2 uv = vec2(-1);
     float t = -1.0;
     Triangle tri;
@@ -368,6 +367,9 @@ vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in 
     vec3 e1 = tri.v1 - tri.v0;
     vec3 e2 = tri.v2 - tri.v0;
     vec3 normal = normalize(cross(e1, e2));
+    
+    if (dot(rayDir, normal) > 0.0)
+        normal = -normal;
 
     vec3 hitPos = rayOrigin + rayDir * t;
     
@@ -382,7 +384,7 @@ vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in 
 
     if (alpha != 1.0) {
         for (int i = 0; i < MAX_REFLECTION_TRANSPARENCY_LAYERS; i++) {
-            uvt = trace(hitPos - normal * 0.0001, rayDir, tri);
+            uvt = trace(hitPos - normal * 0.001, rayDir, tri);
             uv = uvt.xy;
             t  = uvt.z;
 
@@ -393,6 +395,9 @@ vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in 
                 e1 = tri.v1 - tri.v0;
                 e2 = tri.v2 - tri.v0;
                 normal = normalize(cross(e1, e2));
+
+                if (dot(rayDir, normal) > 0.0)
+                    normal = -normal;
                 
                 hitPos = hitPos + rayDir * t;
 
@@ -401,6 +406,7 @@ vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in 
                 texel = clamp(ivec2(triUv * tri.texSize), ivec2(0), tri.texSize - 1);
 
                 vec4 newCol = texelFetch(entityAtlas, pos + texel, 0);
+                
                 color.rgb = mix(newCol.rgb, color.rgb, alpha);
                 alpha = newCol.a;
             }
@@ -483,7 +489,7 @@ void main() {
             #ifdef SSR
             reflection = max(reflection, wsr(rayOrigin, rayDir, sunDir, moonDir, playerPos));
             #else
-            reflection = wsr(rayOrigin, rayDir, sunDir, moonDir, playerPos);
+            reflection = wsr(rayOrigin, rayDir, sunDir, moonDir, playerPos, lightDir, timeMod);
             #endif
             #endif
 
@@ -497,7 +503,7 @@ void main() {
         color.rgb = mix(color.rgb, getSky(skyDir, sunDir, moonDir, worldPos, false), clamp(fogFactor, 0.0, 1.0));
     }
 
-    float normalized = float(entityTriCount) / float(MAX_ENTITY_TRIANGLES);
+    float normalized = float(entities.triCount) / float(MAX_ENTITY_TRIANGLES);
     if (gl_FragCoord.x < normalized * viewWidth && gl_FragCoord.y < 20) {
         color.rgb = vec3(normalized, 1.0 - normalized, 0.0);
     }
