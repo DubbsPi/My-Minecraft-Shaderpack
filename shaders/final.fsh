@@ -34,7 +34,7 @@ void main() {
     if (lumaRange < max(EDGE_THRESHOLD_MIN, lumaMax * EDGE_THRESHOLD_MAX)){
         // Dithering
         vec3 noise = texture(noisetex, texcoord * vec2(135.126, 290.297) + vec2(628.672, 338.945) * frameTimeCounter).rgb;
-        gl_FragColor = vec4(colorCenter + (noise - 0.5) * 0.006, 1);
+        gl_FragColor = vec4(pow(colorCenter, vec3(0.454545454545)) + (noise - 0.5) * 0.006, 1);
         return;
     }
     
@@ -161,5 +161,5 @@ void main() {
     #endif
     // Dithering
     vec3 noise = texture(noisetex, texcoord * vec2(135.126, 290.297) + vec2(628.672, 338.945) * frameTimeCounter).rgb;
-    gl_FragColor = vec4(texture(colortex0, finalUv).rgb + (noise - 0.5) * 0.006, 1);
+    gl_FragColor = vec4(pow(texture(colortex0, finalUv).rgb, vec3(0.454545454545)) + (noise - 0.5) * 0.006, 1);
 }

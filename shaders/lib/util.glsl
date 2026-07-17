@@ -3,18 +3,19 @@
 #define PI  3.14159265359
 #define TAU 6.28318530718
 
-#define VOXEL_RADIUS 128
-#define DOUBLE_VOXEL_RADIUS VOXEL_RADIUS * 2
-#define WSR_STEPS VOXEL_RADIUS
-
 const int shadowMapResolution = 4096;
 
 
-struct RawVertex {
+struct EntityVertex {
     vec3 pos;
-    vec3 normal;
     vec2 uv;
     uint id;
+};
+
+struct BlockVertex {
+    vec3 pos;
+    vec2 uv;
+    vec4 glcolor;
 };
 
 struct Triangle {
@@ -24,8 +25,18 @@ struct Triangle {
     vec2 uv0;
     vec2 uv1;
     vec2 uv2;
+    vec4 glcolor0;
+    vec4 glcolor1;
+    vec4 glcolor2;
     uint id;
     ivec2 texSize;
+};
+
+struct MortonCodes {
+    uint mortonCodesA;
+    uint triIdsA;
+    uint mortonCodesB;
+    uint triIdsB;
 };
 
 
@@ -57,53 +68,13 @@ vec3 projectAndDivide(in mat4 projectionMatrix, in vec3 position) {
 	return homePos.xyz / homePos.w;
 }
 
-uint getVoxelIndex(in ivec3 worldPos) {
-    ivec3 wrapped = worldPos % ivec3(DOUBLE_VOXEL_RADIUS);
-
-    if (wrapped.x < 0) wrapped.x += DOUBLE_VOXEL_RADIUS;
-    if (wrapped.y < 0) wrapped.y += DOUBLE_VOXEL_RADIUS;
-    if (wrapped.z < 0) wrapped.z += DOUBLE_VOXEL_RADIUS;
-
-    return uint(wrapped.x + wrapped.y * DOUBLE_VOXEL_RADIUS + wrapped.z * DOUBLE_VOXEL_RADIUS * DOUBLE_VOXEL_RADIUS);
-}
-
-int getFaceIndex(in vec3 normal) {
-    vec3 absN = abs(normal);
-    if (absN.x > absN.y && absN.x > absN.z) return normal.x > 0.0? 0:1;
-    else if (absN.y > absN.z) return normal.y > 0.0? 2:3;
-    else return normal.z > 0.0? 4:5;
-}
-
-vec2 getFaceUv(in vec3 hitPoint, in int face) {
-    vec3 p = fract(hitPoint);
-    if (face == 0) return vec2(1.0 - p.z, 1.0 - p.y);
-    if (face == 1) return vec2(p.z, 1.0 - p.y);
-    if (face == 2) return vec2(p.x, p.z);
-    if (face == 3) return vec2(p.x, 1.0 - p.z);
-    if (face == 4) return vec2(p.x, 1.0 - p.y);
-    if (face == 5) return vec2(1.0 - p.x, 1.0 - p.y);
-    return vec2(-1);
-}
-
-bool isVoxelizable(in int blockId) {
-    return (blockId >= 10000 && blockId <= 10430);
-}
-
-bool isTransparent(in int blockId) {
-    return (blockId >= 11030 && blockId <= 11104);
-}
-
-vec3 normalizeScenePos(in vec3 pos, in vec3 sceneMin, in vec3 sceneMax) {
-    return clamp((pos - sceneMin) / (sceneMax - sceneMin), 0.0, 1.0);
-}
-
 ivec2 slotToTexel(in uint slot) {
     const int slotsPerRow = ENTITY_ATLAS_SIZE / ENTITY_ATLAS_SLOT_SIZE;
     ivec2 slotCoord = ivec2(int(slot) % slotsPerRow, int(slot) / slotsPerRow);
     return slotCoord * ENTITY_ATLAS_SLOT_SIZE;
 }
 
-uint expandBits(uint v) {
+uint expandBits(in uint v) {
     v = (v * 0x00010001u) & 0xFF0000FFu;
     v = (v * 0x00000101u) & 0x0F00F00Fu;
     v = (v * 0x00000011u) & 0xC30C30C3u;
@@ -111,16 +82,14 @@ uint expandBits(uint v) {
     return v;
 }
 
-uint mortonCode3d(vec3 n) {
-    uint x = uint(clamp(n.x * 1024.0, 0.0, 1023.0));
-    uint y = uint(clamp(n.y * 1024.0, 0.0, 1023.0));
-    uint z = uint(clamp(n.z * 1024.0, 0.0, 1023.0));
-
-    uint xx = expandBits(x);
-    uint yy = expandBits(y);
-    uint zz = expandBits(z);
-
-    return xx | (yy << 1) | (zz << 2);
+uint mortonCode3d(in vec3 p) {
+    float x = clamp(p.x * 1024.0, 0.0, 1023.0);
+    float y = clamp(p.y * 1024.0, 0.0, 1023.0);
+    float z = clamp(p.z * 1024.0, 0.0, 1023.0);
+    uint xx = expandBits(uint(x));
+    uint yy = expandBits(uint(y));
+    uint zz = expandBits(uint(z));
+    return xx * 4u + yy * 2u + zz;
 }
 
 float rgbToLuma(in vec3 c){

@@ -6,27 +6,25 @@
 
 //#define CHEAP_SKY
 //#define SSR
-#define WSR
+//#define WSR
+//#define FXAA
 
-#define MAX_REFLECTION_TRANSPARENCY_LAYERS 2
-
-// Voxel stuff in util.glsl
-
-#define BVH_WORKGROUPS 128
+#define MAX_REFLECTION_TRANSPARENCY_LAYERS 0
 
 #define MAX_ENTITY_TRIANGLES 8192
-#define MAX_ENTITY_DISTANCE  128
+#define MAX_TERRAIN_TRIANGLES 1048576
+
+#define TRACE_STACK_SIZE 32
 
 #define ENTITY_ATLAS_SLOT_SIZE 128
 #define ENTITY_ATLAS_SIZE 4096
 
 // For FXAA
-#define FXAA
 #define EDGE_THRESHOLD_MIN 0.0312
 #define EDGE_THRESHOLD_MAX 0.125
 #define ITERATIONS 12
 #define SUBPIXEL_QUALITY 0.75
-#define QUALITY(i) ((i) < 5 ? 1.0 : ((i) == 5 ? 1.5 : ((i) < 10 ? 2.0 : ((i) == 10 ? 4.0 : 8.0))))
+#define QUALITY(i) ((i) < 5? 1.0 : ((i) == 5? 1.5 : ((i) < 10? 2.0 : ((i) == 10? 4.0 : 8.0))))
 
 
 const float epsilon = 1e-7;
@@ -44,11 +42,9 @@ const float shadowBias = -0.001;
 
 
 const vec3 blocklightColor = vec3(1.0, 0.5, 0.08);
-const vec3 skylightColor = vec3(0.05, 0.15, 0.3);
-const vec3 sunlightColor = vec3(1.0);
 
 const float sunIntensity  = 25.0;
-const float moonIntensity = sunIntensity / 100.0;
+const float moonIntensity = 0.25;
 const float earthRadius  = 6371000;  // Physical radius
 const float atmosphereRadius = earthRadius + 100000;
 const vec3  betaRayleigh = vec3(5.8e-6, 13.5e-6, 33.1e-6);

@@ -15,7 +15,7 @@ out vec3 normal;
 
 
 layout(std430, binding = 0) buffer Vertices {
-    RawVertex data[];
+    EntityVertex data[];
 } verts;
 layout(std430, binding = 1) buffer EntityBuffer {
     uint triCount;
@@ -52,6 +52,10 @@ void bakeTexture(in int slot) {
 
 
 void main() {
+    texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
+    lmcoord = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
+	glcolor = gl_Color;
+    
     uint texHash = getTextureHash();
     uint assignedSlot = 0xffffffffu;
     uint initialPos = texHash % 1024u;
@@ -74,18 +78,14 @@ void main() {
 
     if (assignedSlot == 0xffffffffu) assignedSlot = 0u;
 
-	texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
-    lmcoord = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
-	glcolor = gl_Color;
+    vec3 viewPos = (gl_ModelViewMatrix * gl_Vertex).xyz;
+    vec3 feetPlayerPos = (gbufferModelViewInverse * vec4(viewPos, 1)).xyz;
+
+    uint vertexIndex = atomicAdd(entities.vertexCount, 1u);
+    verts.data[vertexIndex] = EntityVertex(feetPlayerPos, texcoord, assignedSlot);
+    if ((vertexIndex & 3u) == 2u) atomicAdd(entities.triCount, 2u);
 
     normal = mat3(gbufferModelViewInverse) * gl_NormalMatrix * gl_Normal;
 
-    vec3 blockViewPos = (gl_ModelViewMatrix * gl_Vertex).xyz;
-    vec3 feetPlayerPos = (gbufferModelViewInverse * vec4(blockViewPos, 1)).xyz;
-
-    uint vertexIndex = atomicAdd(entities.vertexCount, 1u);
-    verts.data[vertexIndex] = RawVertex(feetPlayerPos, normal, texcoord, assignedSlot);
-    if ((vertexIndex & 3u) == 2u) atomicAdd(entities.triCount, 2u);
-    
     gl_Position = ftransform();
 }
