@@ -34,6 +34,7 @@ uniform mat4 shadowModelView;
 uniform mat4 shadowProjection;
 uniform mat4 gbufferProjection;
 uniform mat4 gbufferModelView;
+uniform mat4 shadowProjectionInverse;
 
 uniform vec3 cameraPosition;
 
@@ -47,6 +48,17 @@ uniform float fogDensity;
 uniform vec3 fogColor;
 uniform int frameCounter;
 
+uniform int isEyeInWater;
+uniform bool isRightHanded;
+uniform float eyeAltitude;
+
+uniform int heldBlockLightValue;
+uniform int heldBlockLightValue2;
+
+uniform ivec3 cameraPositionInt;
+uniform vec3 cameraPositionFract;
+uniform vec3 playerBodyVector;
+
 in vec2 texcoord;
 
 
@@ -57,18 +69,13 @@ layout (rgba8) uniform image2D skyconstants;
 layout(location = 0) out vec4 color;
 
 
-layout(std430, binding = 0) buffer EntityVertices {
-    EntityVertex data[];
-} entityVerts;
 layout(std430, binding = 1) buffer EntityBuffer {
-    uint triCount;
-    uint vertexCount;
     uint textureHashes[1024];
     ivec2 texSize[1024];
 } entities;
 
 layout(std430, binding = 2) buffer BlockVertices {
-    BlockVertex data[];
+    Vertex data[];
 } blockVerts;
 layout(std430, binding = 3) buffer TerrainBuffer {
     uint triCount;
@@ -78,9 +85,12 @@ layout(std430, binding = 3) buffer TerrainBuffer {
 layout(std430, binding = 4) buffer MortonCode {
     MortonCodes codes[];
 };
-layout(std430, binding = 5) buffer Histogram {
-    uint digitTotals[256];
-    uint histogram[];
+layout(std430, binding = 6) coherent buffer Bvh {
+    BvhNode nodes[];
+};
+layout(std430, binding = 7) coherent buffer Flags {
+    uint rootIndex;
+    uint nodeCounters[];
 };
 
 
@@ -97,6 +107,14 @@ const int colortex10Format = RGBA8;
 const int colortex11Format = RGBA8;
 const int colortex12Format = RGBA8;
 */
+
+
+struct HitInfo {
+    vec2 uv;
+    float t;
+    bool hit;
+    uint triId;
+};
 
 
 vec2 intersectSphere(in vec3 rayOrigin, in vec3 rayDir, in float radius) {
@@ -128,13 +146,17 @@ float opticalDepth(in vec3 pos, in vec3 dir, in float rayLength, in float scaleH
     return depth;
 }
 
-vec3 scatterAtmosphere(in vec3 viewDir, in vec3 sunDir, in vec3 moonDir, in vec3 worldPos) {
-    vec3 origin = vec3(0, earthRadius + worldPos.y * 0.01, 0);
+vec3 scatterAtmosphere(in vec3 viewDir, in vec3 sunDir, in vec3 moonDir) {
+    vec3 origin = vec3(0, earthRadius + eyeAltitude, 0);
 
     // Get the atmospheric exit
     vec2 atmoHit = intersectSphere(origin, viewDir, atmosphereRadius);
     float tMin = max(atmoHit.x, 0.0);
     float tMax = atmoHit.y;
+
+    vec2 groundHit = intersectSphere(origin, viewDir, earthRadius);
+    if (groundHit.x > 0.0)
+        tMax = min(tMax, groundHit.x);
 
     float stepSize = (tMax - tMin) / float(SKY_VIEW_SAMPLES);
 
@@ -189,7 +211,7 @@ vec3 scatterAtmosphere(in vec3 viewDir, in vec3 sunDir, in vec3 moonDir, in vec3
     return skyColor;
 }
 
-vec3 getSky(in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 worldPos, in float timeMod, in bool celestials) {
+vec3 getSky(in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in float timeMod, in bool celestials) {
 	#ifdef CHEAP_SKY    
 	float t = clamp(rayDir.y, 0.0, 1.0);
     vec3 skyColor = mix(fogColor, fogColor * vec3(0.5, 0.5, 0.75), t);
@@ -203,23 +225,19 @@ vec3 getSky(in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 worldPos, i
     return pow(skyColor * clamp(sunDir.y * 2.0, 0.0, 1.0), vec3(2.2));
 	
 	#else
-	vec3 skyColor = scatterAtmosphere(rayDir, sunDir, moonDir, worldPos);
+    rayDir.y = max(rayDir.y, -0.25);
+    
+	vec3 skyColor = scatterAtmosphere(rayDir, sunDir, moonDir);
     
     if (celestials) {
         float sunDisc = smoothstep(0.99925, 1.0, dot(rayDir, sunDir));
-        skyColor += 0.5 * sunIntensity * sunDisc * smoothstep(0.0, 1.0, sunDir.y);
+        skyColor += 0.75 * sunIntensity * sunDisc * smoothstep(0.0, 1.0, sunDir.y);
         float moonDisk = smoothstep(0.9995, 1.0, dot(rayDir, moonDir));
         skyColor += moonIntensity * moonDisk * smoothstep(0.0, 1.0, moonDir.y);
     }
 
-    float horizonBlend = smoothstep(-0.05, 0.05, rayDir.y);
-    vec3 brown = vec3(0.35, 0.275, 0.2) * fogColor;
-    
-    if (rayDir.y > -0.15)
-	    return mix(brown, skyColor, horizonBlend) * max(timeMod * 2.0 - 0.5, 0.25);
-    else
-        return brown * max(timeMod * 2.0 - 0.5, 0.25);
-	#endif
+    return skyColor;
+    #endif
 }
 
 vec3 getShadow(in vec3 shadowScreenPos) {
@@ -234,10 +252,12 @@ vec3 getShadow(in vec3 shadowScreenPos) {
     return shadowColor.rgb;
 }
 
-vec3 getSoftShadow(in vec4 shadowClipPos) {
+vec3 getSoftShadow(in vec4 shadowClipPos, in vec3 playerPos) {
     vec3 shadowAccum = vec3(0);
     const float samplesMult = 1.0 / float(SHADOW_RANGE * SHADOW_RANGE * 5);
-    const float mult = SHADOW_RADIUS / float(SHADOW_RANGE) / float(shadowMapResolution);
+    const float mult = SHADOW_RADIUS / float(SHADOW_RANGE) * 0.0009765625;
+
+    if (any(greaterThan(abs(playerPos), vec3(shadowDistance)))) return vec3(1);
 
     float noise = texture(noisetex, texcoord * vec2(3168.833, 2845.591)+ vec2(628.672, 338.945) * frameTimeCounter).r;
     float theta = noise * TAU;
@@ -250,7 +270,6 @@ vec3 getSoftShadow(in vec4 shadowClipPos) {
         for (int y = -SHADOW_RANGE; y <= SHADOW_RANGE; y++) {
             vec2 offset = vec2(x, y) * mult * rotation;
             vec4 offsetShadowClipPos = shadowClipPos + vec4(offset, shadowBias - 0.01 * length(shadowClipPos.xy), 0);
-            offsetShadowClipPos.xyz = distortShadowClip(offsetShadowClipPos.xyz);
             vec3 shadowNdcPos = offsetShadowClipPos.xyz / offsetShadowClipPos.w;
             vec3 shadowScreenPos = shadowNdcPos * 0.5 + 0.5;
             shadowAccum += getShadow(shadowScreenPos);
@@ -259,7 +278,7 @@ vec3 getSoftShadow(in vec4 shadowClipPos) {
     return shadowAccum * samplesMult;
 }
 
-vec3 ssr(in vec3 eyeRayOrigin, in vec3 eyeRayDir, in vec3 worldRayDir, in vec3 sunDir, in vec3 moonDir, in vec3 worldPos, in float timeMod) {
+vec3 ssr(in vec3 eyeRayOrigin, in vec3 eyeRayDir, in vec3 worldRayDir, in vec3 sunDir, in vec3 moonDir, in float timeMod) {
 	// Rough search
 	bool hit = false;
 	float coarseStepSize = 0.85;
@@ -296,7 +315,7 @@ vec3 ssr(in vec3 eyeRayOrigin, in vec3 eyeRayDir, in vec3 worldRayDir, in vec3 s
         }
     }
 
-	if (!hit) return getSky(worldRayDir, sunDir, moonDir, worldPos, timeMod, true);
+	if (!hit) return getSky(worldRayDir, sunDir, moonDir, timeMod, true);
 
 	// Fine search
 	float currentStep = coarseStepSize;
@@ -328,7 +347,7 @@ vec3 ssr(in vec3 eyeRayOrigin, in vec3 eyeRayDir, in vec3 worldRayDir, in vec3 s
 
 	// Final sky check
 	if (any(lessThan(finalUv, vec2(0.0))) || any(greaterThan(finalUv, vec2(1.0))))
-		return getSky(worldRayDir, sunDir, moonDir, worldPos, timeMod, true);
+		return getSky(worldRayDir, sunDir, moonDir, timeMod, true);
 	
 	return texture(colortex0, finalUv).rgb;
 }
@@ -363,14 +382,14 @@ bool intersectBox(in vec3 rayOrigin, in vec3 inverseDir, in vec3 bMin, in vec3 b
     vec3 tSmall = min(t0, t1);
     vec3 tBig = max(t0, t1);
 
-    float tMinAxis = max(tSmall.x, max(tSmall.y, tSmall.z));
-    float tMaxAxis = min(tBig.x, min(tBig.y, tBig.z));
+    float tEnter = max(tSmall.x, max(tSmall.y, tSmall.z));
+    float tExit  = min(tBig.x, min(tBig.y, tBig.z));
 
-    tHit = max(tMinAxis, 0.0);
-    return tMaxAxis >= tHit && tMinAxis <= tMax;
+    tHit = max(tEnter, 0.0);
+    return tExit >= tHit && tEnter <= tMax;
 }
 
-Triangle getEntityTri(in uint id) {
+Triangle getTri(in uint id) {
     uint quadID = id >> 1;
     uint triInQuad = id & 1u;
     uint baseVert = quadID * 4u;
@@ -379,14 +398,14 @@ Triangle getEntityTri(in uint id) {
     uint i1 = (triInQuad == 0u)? (baseVert + 1u) : (baseVert + 2u);
     uint i2 = (triInQuad == 0u)? (baseVert + 2u) : (baseVert + 3u);
 
-    EntityVertex v0 = entityVerts.data[i0];
-    EntityVertex v1 = entityVerts.data[i1];
-    EntityVertex v2 = entityVerts.data[i2];
+    Vertex v0 = blockVerts.data[i0];
+    Vertex v1 = blockVerts.data[i1];
+    Vertex v2 = blockVerts.data[i2];
 
-    return Triangle(v0.pos, v1.pos, v2.pos, v0.uv, v1.uv, v2.uv, vec4(0), vec4(0), vec4(0), v0.id, entities.texSize[v0.id]);
+    return Triangle(v0.pos, v1.pos, v2.pos, v0.uv, v1.uv, v2.uv, v0.glcolor, v1.glcolor, v2.glcolor, v0.id, v0.id >= 0? entities.texSize[v0.id] : ivec2(0));
 }
 
-Triangle getBlockTri(in uint id) {
+mat3 getTriVerts(in uint id) {
     uint quadID = id >> 1;
     uint triInQuad = id & 1u;
     uint baseVert = quadID * 4u;
@@ -395,72 +414,97 @@ Triangle getBlockTri(in uint id) {
     uint i1 = (triInQuad == 0u)? (baseVert + 1u) : (baseVert + 2u);
     uint i2 = (triInQuad == 0u)? (baseVert + 2u) : (baseVert + 3u);
 
-    BlockVertex v0 = blockVerts.data[i0];
-    BlockVertex v1 = blockVerts.data[i1];
-    BlockVertex v2 = blockVerts.data[i2];
+    Vertex v0 = blockVerts.data[i0];
+    Vertex v1 = blockVerts.data[i1];
+    Vertex v2 = blockVerts.data[i2];
 
-    return Triangle(v0.pos, v1.pos, v2.pos, v0.uv, v1.uv, v2.uv, v0.glcolor, v1.glcolor, v2.glcolor, 0u, ivec2(0));
+    return mat3(v0.pos, v1.pos, v2.pos);
 }
 
-vec3 trace(in vec3 rayOrigin, in vec3 rayDir, out Triangle tri, out bool entity) {
-    vec2 uv = vec2(-1);
-    float t = -1.0;
-    int tI = -1;
+HitInfo trace(in vec3 rayOrigin, in vec3 rayDir) {
+    vec3 inverseDir = 1.0 / rayDir;
+    float tMax = TRACE_TMAX;
     
-    for (int i = 0; i < min(blocks.triCount, 2000); i++) {
-        Triangle temp = getBlockTri(i);
-        vec3 uvt = vec3(-1);
-        mat3 vertices = mat3(temp.v0, temp.v1, temp.v2) + mat3(cameraPosition, cameraPosition, cameraPosition);
-        bool hit = intersectTri(rayOrigin, rayDir, vertices, uvt);
+    HitInfo result = HitInfo(vec2(0), -1.0, false, 0u);
 
-        if (hit && (uvt.z < t || t < -0.5)) {
-            tri = temp;
-            uv = uvt.xy;
-            t  = uvt.z;
-            entity = false;
-        }
-    }
-    for (int i = 0; i < min(entities.triCount, MAX_ENTITY_TRIANGLES); i++) {
-        Triangle temp = getEntityTri(i);
-        vec3 uvt = vec3(-1);
-        mat3 vertices = mat3(temp.v0, temp.v1, temp.v2) + mat3(cameraPosition, cameraPosition, cameraPosition);
-        bool hit = intersectTri(rayOrigin, rayDir, vertices, uvt);
+    vec3 localRayOrigin = rayOrigin - cameraPosition;
 
-        if (hit && (uvt.z < t || t < -0.5)) {
-            tri = temp;
-            uv = uvt.xy;
-            t  = uvt.z;
-            tI = i;
-            entity = true;
+    int triCount = int(blocks.triCount);
+    int leafOffset = triCount - 1;
+
+    int stack[TRACE_STACK_SIZE];
+    int stackPointer = 0;
+    int current = int(rootIndex);
+
+    while (true) {
+        if (current >= leafOffset) {
+            uint leafId = uint(current - leafOffset);
+            uint triId = codes[leafId].triIdsA;
+            mat3 verts = getTriVerts(triId);
+            vec3 c = (verts[0] + verts[1] + verts[2]) * 0.33333333;
+            verts[0] += (verts[0] - c) * 0.01;
+            verts[1] += (verts[1] - c) * 0.01;
+            verts[2] += (verts[2] - c) * 0.01;
+
+            vec3 uvt;
+            if (intersectTri(localRayOrigin, rayDir, verts, uvt)) {
+                result = HitInfo(uvt.xy, uvt.z, true, triId);
+                tMax = uvt.z;
+            }
+        } else {
+            int left  = nodes[current].leftChild;
+            int right = nodes[current].rightChild;
+
+            float tLeft, tRight;
+            bool hitLeft  = intersectBox(localRayOrigin, inverseDir, nodes[left].minBounds, nodes[left].maxBounds, tMax, tLeft);
+            bool hitRight = intersectBox(localRayOrigin, inverseDir, nodes[right].minBounds, nodes[right].maxBounds, tMax, tRight);
+
+            if (hitLeft && hitRight) {
+                if (tLeft > tRight) {
+                    // Swap the two
+                    int temp = left;
+                    left = right;
+                    right = temp;
+                }
+                if (stackPointer < TRACE_STACK_SIZE)
+                    stack[stackPointer++] = right;
+                current = left;
+                continue;
+            } else if (hitLeft) {
+                current = left;
+                continue;
+            } else if (hitRight) {
+                current = right;
+                continue;
+            }
         }
+
+        if (stackPointer == 0) break;
+        current = stack[--stackPointer];
     }
-    return vec3(uv, t);
+    return result;
 }
 
-vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 playerPos, in vec3 lightDir, in float timeMod, in vec3 sunLightColor, in vec3 skyLightColor) {
+vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in vec3 lightDir, in float timeMod, in vec3 sunLightColor, in vec3 skyLightColor) {
     if (frameCounter < 4) return vec3(0);
 
-    uint triHit;
-    vec3 uvt;
-    bool entity;
-    Triangle tri;
+    HitInfo result = trace(rayOrigin, rayDir);
 
-    uvt = trace(rayOrigin, rayDir, tri, entity);
+    vec3 sky = getSky(rayDir, sunDir, moonDir, timeMod, true);
+    if (!result.hit) return sky;
 
-    vec2 uv = uvt.xy;
-    float t = uvt.z;
-
-    if (t < -0.5) return getSky(rayDir, sunDir, moonDir, playerPos, timeMod, true);
-
+    Triangle tri = getTri(result.triId);
+    bool entity = tri.id >= 0;
+    
+    vec3 hitPos = rayOrigin + rayDir * result.t;
+    
     vec3 e1 = tri.v1 - tri.v0;
     vec3 e2 = tri.v2 - tri.v0;
     vec3 normal = normalize(cross(e1, e2));
 
-    vec3 hitPos = rayOrigin + rayDir * t;
-    
     // Interpolate uv between vertices
-    vec2 triUv = tri.uv0 * (1.0 - uv.x - uv.y) + tri.uv1 * uv.x + tri.uv2 * uv.y;
-    vec4 glcolor = tri.glcolor0 * (1.0 - uv.x - uv.y) + tri.glcolor1 * uv.x + tri.glcolor2 * uv.y;
+    vec2 triUv  = tri.uv0 * (1.0 - result.uv.x - result.uv.y) + tri.uv1 * result.uv.x + tri.uv2 * result.uv.y;
+    vec4 glcolor = tri.glcolor0 * (1.0 - result.uv.x - result.uv.y) + tri.glcolor1 * result.uv.x + tri.glcolor2 * result.uv.y;
 
     vec4 color;
     if (entity) {
@@ -473,9 +517,28 @@ vec3 wsr(in vec3 rayOrigin, in vec3 rayDir, in vec3 sunDir, in vec3 moonDir, in 
 
     color.rgb *= sunLightColor * max(dot(lightDir, normal), 0.0) * mix(0.01, 1.0, timeMod) + skyLightColor;
     
-    return mix(color.rgb, getSky(rayDir, sunDir, moonDir, playerPos, timeMod, true), 1.0 - color.a);
+    return color.rgb;
 }
 
+vec3 traceLight(in vec3 rayOrigin, in vec3 lightPos, in float lightLevel) {
+    float dist = length(lightPos - rayOrigin);
+
+    if (dist >= lightLevel) return vec3(0);
+
+    vec3 rayDir = normalize(lightPos - rayOrigin);
+    HitInfo result = trace(rayOrigin, rayDir);
+
+    if (result.hit && result.t < dist) return vec3(0);
+
+    float lightFalloff = clamp((lightLevel - dist) / 15.0, 0.0, 1.0);
+    return vec3(lightFalloff);
+}
+
+vec3 getHandheldLighting(in vec3 rayOrigin, in vec3 rightHand, in vec3 leftHand) {
+    vec3 light = traceLight(rayOrigin, rightHand, heldBlockLightValue);
+    light += traceLight(rayOrigin, leftHand, heldBlockLightValue2);
+    return light;
+}
 
 void main() {
     float depth = texture(depthtex0, texcoord).r;
@@ -495,26 +558,14 @@ void main() {
 	float timeMod = cos(float(worldTime) * 0.00004166667 * PI) * 0.5 + 0.5;
 
     if (ivec2(gl_FragCoord.xy) == ivec2(0)) {
-        vec3 skyLightColor = getSky(vec3(0, 1, 0), sunDir, moonDir, worldPos, timeMod, false);
-        vec3 sunLightColor = getSky(sunDir, sunDir, moonDir, worldPos, timeMod, false) * (lightDir == moonDir? 50.0 : 0.5);
+        vec3 skyLightColor = getSky(vec3(0, 1, 0), sunDir, moonDir, timeMod, false);
+        vec3 sunLightColor = getSky(sunDir, sunDir, moonDir, timeMod, false) * (lightDir == moonDir? 50.0 : 0.5);
         
-        imageStore(skyconstants, ivec2(0), vec4(skyLightColor, 1));
+        imageStore(skyconstants, ivec2(0, 0), vec4(skyLightColor, 1));
         imageStore(skyconstants, ivec2(1, 0), vec4(sunLightColor, 1));
-
-        
-        uint firstBadIndex = 0u;
-        for (uint i = 1u; i < blocks.triCount; i++) {
-            if (codes[i - 1u].mortonCodesA > codes[i].mortonCodesA) {
-                firstBadIndex = i;
-                break;
-            }
-        }
-        
-        if (firstBadIndex != 0u)
-            imageStore(skyconstants, ivec2(0, 1), unpackUnorm4x8(firstBadIndex));
     }
 
-    vec3 skyColor = getSky(skyDir, sunDir, moonDir, worldPos, timeMod, true);
+    vec3 skyColor = getSky(skyDir, sunDir, moonDir, timeMod, true);
 
     // Sky test
     if (depth == 1.0) {
@@ -528,23 +579,31 @@ void main() {
         vec4 data = texture(colortex1, texcoord);
 
         vec2 lightmap = data.rg;
+        bool ignoreLighting = data.b > 0.5;
         vec3 encodedNormal = texture(colortex2, texcoord).rgb;
         vec3 normal = normalize(encodedNormal - 0.5);  // World space normal
 
         vec3 skyLightColor = texelFetch(skyConstants, ivec2(0), 0).rgb;
         vec3 sunLightColor = texelFetch(skyConstants, ivec2(1, 0), 0).rgb;
-
-        vec3 blockLight = lightmap.r * blocklightColor;
-        vec3 skyLight = lightmap.g * skyLightColor * mix(0.01, 1.0, timeMod);
-
-        // Shadow calculations
-        vec3 shadowViewPos = (shadowModelView * vec4(playerPos, 1)).xyz;
-        vec4 shadowClipPos = shadowProjection * vec4(shadowViewPos, 1);
         
-        vec3 shadow   = getSoftShadow(shadowClipPos);
-        vec3 sunLight = sunLightColor * max(dot(lightDir, normal), 0.0) * shadow * mix(0.01, 1.0, timeMod);
+        if (!ignoreLighting) {
+            vec3 rayOrigin = worldPos + normal * 0.01;
+            vec3 right = normalize(cross(playerBodyVector, vec3(0.0, 1.0, 0.0)));
+            vec3 rightHand = cameraPositionFract + cameraPositionInt + vec3(0, -0.25, 0) + right * (isRightHanded? 0.2 : -0.2);
+            vec3 leftHand  = cameraPositionFract + cameraPositionInt + vec3(0, -0.25, 0) + right * (isRightHanded? -0.2 : 0.2);
 
-        color.rgb *= blockLight + skyLight + sunLight;
+            vec3 blockLight = getHandheldLighting(rayOrigin, rightHand, leftHand) * blocklightColor;
+            vec3 skyLight = lightmap.g * skyLightColor * mix(0.01, 1.0, timeMod);
+
+            // Shadow calculations
+            vec3 shadowViewPos = (shadowModelView * vec4(playerPos, 1)).xyz;
+            vec4 shadowClipPos = shadowProjection * vec4(shadowViewPos, 1);
+            
+            vec3 shadow   = getSoftShadow(shadowClipPos, playerPos);
+            vec3 sunLight = sunLightColor * max(dot(lightDir, normal), 0.0) * shadow * mix(0.01, 1.0, timeMod);
+
+            color.rgb *= blockLight + skyLight + sunLight;
+        }
 
         // LabPBR 1.3 stuff
         float f0 = specularSample.r;
@@ -563,7 +622,7 @@ void main() {
             vec3 viewNormal = mat3(gbufferModelView) * normal;
             vec3 viewRayDir = reflect(normalize(viewPos), viewNormal);
             
-            reflection = ssr(viewPos + viewNormal * 0.02, viewRayDir, skyDir, sunDir, moonDir, worldPos, timeMod);
+            reflection = ssr(viewPos + viewNormal * 0.02, viewRayDir, skyDir, sunDir, moonDir, timeMod);
             #endif
 
             #ifdef WSR
@@ -571,9 +630,9 @@ void main() {
             vec3 rayDir = reflect(skyDir, normal);
 
             #ifdef SSR
-            reflection = max(reflection, wsr(rayOrigin, rayDir, sunDir, moonDir, playerPos));
+            reflection = max(reflection, wsr(rayOrigin, rayDir, sunDir, moonDir, lightDir, timeMod, sunLightColor, skyLightColor));
             #else
-            reflection = wsr(rayOrigin, rayDir, sunDir, moonDir, playerPos, lightDir, timeMod, sunLightColor, skyLightColor);
+            reflection = wsr(rayOrigin, rayDir, sunDir, moonDir, lightDir, timeMod, sunLightColor, skyLightColor);
             #endif
             #endif
 
@@ -587,17 +646,28 @@ void main() {
         color.rgb = mix(color.rgb, skyColor, clamp(fogFactor, 0.0, 1.0));
     }
 
-    float normalized = float(entities.triCount) / float(MAX_ENTITY_TRIANGLES);
-    if (gl_FragCoord.x < normalized * viewWidth && gl_FragCoord.y < 20)
-        color.rgb = vec3(normalized, 1.0 - normalized, 0.0);
-    
-    normalized = float(blocks.triCount) / float(MAX_TERRAIN_TRIANGLES);
+    #ifdef DEBUG
+    float normalized = float(blocks.triCount) / float(MAX_TERRAIN_TRIANGLES);
     if (gl_FragCoord.x < normalized * viewWidth && gl_FragCoord.y >= 20 && gl_FragCoord.y < 40)
         color.rgb = vec3(normalized, 1.0 - normalized, 0.0);
     
     if (gl_FragCoord.y >= 40 && gl_FragCoord.y < 60)
-        color.rgb = unpackUnorm4x8(codes[int(gl_FragCoord.x)].mortonCodesA).rgb;
+        color.rgb = unpackUnorm4x8(codes[int(texcoord.x * float(blocks.triCount))].mortonCodesA).rgb;
     
-    if (int(gl_FragCoord.x) == int(packUnorm4x8(texelFetch(skyConstants, ivec2(0, 1), 0))))
-        color.rgb *= vec3(1, 0, 0);
+    if (gl_FragCoord.y >= 60 && gl_FragCoord.y < 80) {
+        float m = 1.0 / blocks.triCount;
+        color.r = float(nodes[int(texcoord.x * float(blocks.triCount))].leftChild) * m;
+        color.g = float(nodes[int(texcoord.x * float(blocks.triCount))].rightChild) * m;
+        color.b = float(nodes[int(texcoord.x * float(blocks.triCount))].parent) * m;
+    }
+
+    if (gl_FragCoord.y >= 80 && gl_FragCoord.y < 90)
+        color.rgb = normalize(abs(nodes[int(texcoord.x * float(blocks.triCount))].minBounds));
+    if (gl_FragCoord.y >= 90 && gl_FragCoord.y < 100)
+        color.rgb = normalize(abs(nodes[int(texcoord.x * float(blocks.triCount))].maxBounds));
+    
+    if (gl_FragCoord.y >= 100 && gl_FragCoord.y < 120)
+        if (int(gl_FragCoord.x) == int(rootIndex))
+            color.rgb = vec3(0, 1, 0);
+    #endif
 }

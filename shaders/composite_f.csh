@@ -3,7 +3,7 @@
 #include "/lib/util.glsl"
 
 layout(local_size_x = 256) in;
-const ivec3 workGroups = ivec3(MAX_TERRAIN_TRIANGLES >> 8, 1, 1);
+const ivec3 workGroups = ivec3(NUM_WORKGROUPS, 1, 1);
 
 
 layout(std430, binding = 3) buffer TerrainBuffer {
@@ -25,6 +25,7 @@ void main() {
     const int bitShift = 8;
     
     uint li = gl_LocalInvocationID.x;
+    const uint workGroupCount = NUM_WORKGROUPS;
 
     localHist[li] = 0u;
     barrier();
@@ -37,5 +38,5 @@ void main() {
     }
     barrier();
 
-    histogram[li * gl_NumWorkGroups.x + gl_WorkGroupID.x] = localHist[li];
+    histogram[li * workGroupCount + gl_WorkGroupID.x] = localHist[li];
 }

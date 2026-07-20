@@ -6,6 +6,11 @@ layout(local_size_x = 256) in;
 const ivec3 workGroups = ivec3(1, 1, 1);
 
 
+layout(std430, binding = 3) buffer TerrainBuffer {
+    uint triCount;
+    uint vertexCount;
+} blocks;
+
 layout(std430, binding = 5) buffer Histogram {
     uint digitTotals[256];
     uint histogram[];

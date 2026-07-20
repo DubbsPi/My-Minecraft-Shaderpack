@@ -8,21 +8,27 @@ uniform sampler2D gtexture;
 uniform vec3 cameraPosition;
 uniform mat4 gbufferModelViewInverse;
 
+uniform int entityId;
+
+
 out vec2 texcoord;
 out vec2 lmcoord;
 out vec4 glcolor;
 out vec3 normal;
+flat out int entity;
 
 
-layout(std430, binding = 0) buffer Vertices {
-    EntityVertex data[];
+layout(std430, binding = 2) buffer Vertices {
+    Vertex data[];
 } verts;
 layout(std430, binding = 1) buffer EntityBuffer {
-    uint triCount;
-    uint vertexCount;
     uint textureHashes[1024];
     ivec2 texSize[1024];
 } entities;
+layout(std430, binding = 3) buffer TerrainBuffer {
+    uint triCount;
+    uint vertexCount;
+};
 
 layout(rgba8) uniform image2D entityatlas;
 
@@ -50,11 +56,18 @@ void bakeTexture(in int slot) {
     }
 }
 
+uint fastMod3(uint x) {
+    uint div3 = (x * 0xAAABu) >> 17; 
+    return x - (div3 * 3u);
+}
+
 
 void main() {
     texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
     lmcoord = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
 	glcolor = gl_Color;
+    normal = mat3(gbufferModelViewInverse) * gl_NormalMatrix * gl_Normal;
+    entity = entityId;
     
     uint texHash = getTextureHash();
     uint assignedSlot = 0xffffffffu;
@@ -81,11 +94,9 @@ void main() {
     vec3 viewPos = (gl_ModelViewMatrix * gl_Vertex).xyz;
     vec3 feetPlayerPos = (gbufferModelViewInverse * vec4(viewPos, 1)).xyz;
 
-    uint vertexIndex = atomicAdd(entities.vertexCount, 1u);
-    verts.data[vertexIndex] = EntityVertex(feetPlayerPos, texcoord, assignedSlot);
-    if ((vertexIndex & 3u) == 2u) atomicAdd(entities.triCount, 2u);
-
-    normal = mat3(gbufferModelViewInverse) * gl_NormalMatrix * gl_Normal;
+    uint vertexIndex = atomicAdd(vertexCount, 1u);
+    verts.data[vertexIndex] = Vertex(feetPlayerPos, texcoord, glcolor, int(assignedSlot));
+    if (fastMod3(vertexIndex) == 2u) atomicAdd(triCount, 2u);
 
     gl_Position = ftransform();
 }

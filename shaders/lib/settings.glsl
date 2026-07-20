@@ -6,35 +6,51 @@
 
 //#define CHEAP_SKY
 //#define SSR
-//#define WSR
-//#define FXAA
+#define WSR
+//#define DEBUG
 
-#define MAX_REFLECTION_TRANSPARENCY_LAYERS 0
+#define MAX_REFLECTION_TRANSPARENCY_LAYERS 4
 
 #define MAX_ENTITY_TRIANGLES 8192
 #define MAX_TERRAIN_TRIANGLES 1048576
+#define NUM_WORKGROUPS 4096
 
 #define TRACE_STACK_SIZE 32
+#define TRACE_TMAX 10000.0
 
 #define ENTITY_ATLAS_SLOT_SIZE 128
 #define ENTITY_ATLAS_SIZE 4096
 
-// For FXAA
+// FXAA
+#define FXAA
 #define EDGE_THRESHOLD_MIN 0.0312
 #define EDGE_THRESHOLD_MAX 0.125
 #define ITERATIONS 12
 #define SUBPIXEL_QUALITY 0.75
 #define QUALITY(i) ((i) < 5? 1.0 : ((i) == 5? 1.5 : ((i) < 10? 2.0 : ((i) == 10? 4.0 : 8.0))))
 
+// Bloom
+#define BLOOM_QUALITY 2 // [0 1 2 3]
+#define BLOOM_RADIUS 35 // [5 10 15 20 25 35 50 75 100 150 200]
+#define BLOOM_STEP_SIZE int[](5, 3, 1, 1)[BLOOM_QUALITY]
+#define BLOOM_INTENSITY 0.5 // [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0]
+#define BLOOM_THREASHOLD 1.0 // [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0]
+
+// Shadows
+#define MAX_SOFT_SHADOW_DISTANCE 32.0
+
 
 const float epsilon = 1e-7;
 
 const int noiseTextureResolution = 128;
 
+const int shadowMapResolution = 4096; // [1024 2048 4096 8192]
+
 const bool shadowtex0Nearest = true;
 const bool shadowtex1Nearest = true;
 const bool shadowcolor0Nearest = true;
 
+const float shadowDistance = MAX_SOFT_SHADOW_DISTANCE;
 const float shadowDistanceRenderMul = 1.0;
 
 const float shadowBias = -0.001;

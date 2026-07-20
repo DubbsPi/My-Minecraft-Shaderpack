@@ -14,6 +14,7 @@ in vec2 texcoord;
 in vec2 lmcoord;
 in vec4 glcolor;
 in vec3 normal;
+flat in int entity;
 
 
 /* RENDERTARGETS: 0,1,2,3 */
@@ -29,6 +30,6 @@ void main() {
 
 	color *= texture(lightmap, lmcoord);
 	specularData = texture(specular, texcoord);
-	lightmapData = vec4(lmcoord, 0.0, 1.0);
-	encodedNormal = vec4(normal * 0.5 + 0.5, 1.0);
+	lightmapData = vec4(lmcoord, 0, 1);
+	encodedNormal = vec4(normal * 0.5 + 0.5, 1);
 }

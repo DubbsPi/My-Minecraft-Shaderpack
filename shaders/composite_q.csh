@@ -3,7 +3,7 @@
 #include "/lib/util.glsl"
 
 layout(local_size_x = 256) in;
-const ivec3 workGroups = ivec3(MAX_TERRAIN_TRIANGLES >> 8, 1, 1);
+const ivec3 workGroups = ivec3(NUM_WORKGROUPS, 1, 1);
 
 
 layout(std430, binding = 3) buffer TerrainBuffer {
@@ -18,9 +18,18 @@ layout(std430, binding = 5) buffer Histogram {
     uint histogram[];
 };
 
+layout(std430, binding = 6) coherent buffer Bvh {
+    BvhNode nodes[];
+};
+layout(std430, binding = 7) coherent buffer Flags {
+    uint rootIndex;
+    uint nodeCounters[];
+};
+
 
 shared uint localHist[256];
 shared uint localOffsets[256];
+shared uint shared_digits[256];
 
 void main() {
     const int bitShift = 24;
@@ -28,9 +37,13 @@ void main() {
     uint li = gl_LocalInvocationID.x;
     uint gi = gl_GlobalInvocationID.x;
     uint i  = gl_WorkGroupID.x;
-    uint numWorkGroups = gl_NumWorkGroups.x;
+    const uint workGroupCount = NUM_WORKGROUPS;
+
+    nodeCounters[gi] = 0u;
+    nodes[gi].parent = -1;
 
     localHist[li] = 0u;
+    shared_digits[li] = 256u;
     barrier();
 
     bool valid = gi < blocks.triCount;
@@ -38,7 +51,10 @@ void main() {
     uint id  = valid? codes[gi].triIdsB : 0u;
     uint digit = (key >> bitShift) & 0xFFu;
 
-    if (valid) atomicAdd(localHist[digit], 1u);
+    if (valid) {
+        atomicAdd(localHist[digit], 1u);
+        shared_digits[li] = digit;
+    }
     barrier();
 
     if (li < 256) localOffsets[li] = localHist[li];
@@ -54,16 +70,17 @@ void main() {
     if (li < 256) localOffsets[li] -= localHist[li];
     barrier();
 
-    localHist[li] = localOffsets[li];
-    barrier();
-
-    uint rank;
-    if (valid)
-        rank = atomicAdd(localHist[digit], 1u) - localOffsets[digit];
-    barrier();
+    uint rank = 0;
+    if (valid) {
+        for (uint t = 0; t < li; t++) {
+            if (shared_digits[t] == digit) {
+                rank++;
+            }
+        }
+    }
 
     if (valid) {
-        uint globalOffset = digitTotals[digit] + histogram[digit * numWorkGroups + i];
+        uint globalOffset = digitTotals[digit] + histogram[digit * workGroupCount + i];
         uint destination = globalOffset + rank;
 
         codes[destination].mortonCodesA = key;

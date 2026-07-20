@@ -3,19 +3,12 @@
 #define PI  3.14159265359
 #define TAU 6.28318530718
 
-const int shadowMapResolution = 4096;
 
-
-struct EntityVertex {
-    vec3 pos;
-    vec2 uv;
-    uint id;
-};
-
-struct BlockVertex {
+struct Vertex {
     vec3 pos;
     vec2 uv;
     vec4 glcolor;
+    int id;
 };
 
 struct Triangle {
@@ -28,7 +21,7 @@ struct Triangle {
     vec4 glcolor0;
     vec4 glcolor1;
     vec4 glcolor2;
-    uint id;
+    int id;
     ivec2 texSize;
 };
 
@@ -37,6 +30,14 @@ struct MortonCodes {
     uint triIdsA;
     uint mortonCodesB;
     uint triIdsB;
+};
+
+struct BvhNode {
+    vec3 minBounds;
+    vec3 maxBounds;
+    int leftChild;
+    int rightChild;
+    int parent;
 };
 
 
@@ -52,15 +53,6 @@ uint nextPowTwo(in uint n) {
     n++;
 
     return n;
-}
-
-vec3 distortShadowClip(in vec3 shadowClipPos) {
-    float distortFactor = length(shadowClipPos.xy) + 0.1;
-
-    shadowClipPos.xy /= distortFactor;
-    shadowClipPos.z  *= 0.5;
-    
-    return shadowClipPos;
 }
 
 vec3 projectAndDivide(in mat4 projectionMatrix, in vec3 position) {
@@ -93,5 +85,5 @@ uint mortonCode3d(in vec3 p) {
 }
 
 float rgbToLuma(in vec3 c){
-    return sqrt(dot(c, vec3(0.299, 0.587, 0.114)));
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
 }

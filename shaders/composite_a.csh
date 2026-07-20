@@ -2,13 +2,13 @@
 
 #include "/lib/util.glsl"
 
-layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
-const ivec3 workGroups = ivec3(MAX_TERRAIN_TRIANGLES >> 6, 1, 1);
+layout(local_size_x = 256) in;
+const ivec3 workGroups = ivec3(NUM_WORKGROUPS, 1, 1);
 
 uniform float far;
 
 layout(std430, binding = 2) buffer BlockVertices {
-    BlockVertex data[];
+    Vertex data[];
 } blockVerts;
 layout(std430, binding = 3) buffer TerrainBuffer {
     uint triCount;
@@ -39,13 +39,12 @@ vec3 getBlockTriCentroid(in uint id) {
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
+
     if (i >= blocks.triCount) return;
 
     vec3 c = getBlockTriCentroid(i);
 
-    vec3 sceneMin = vec3(far * -1.1);
-    vec3 sceneMax = vec3(far * 1.1);
-    c = clamp((c - sceneMin) / (sceneMax - sceneMin), 0.0, 1.0);
+    c = clamp(c / far * 0.5, 0.0, 1.0);
 
     codes[i].mortonCodesA = mortonCode3d(c);
     codes[i].triIdsA = i;

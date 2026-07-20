@@ -12,7 +12,6 @@ uniform int entityId;
 
 
 in vec2 texcoord;
-in vec2 lmcoord;
 in vec4 glcolor;
 in vec3 normal;
 
@@ -28,8 +27,7 @@ void main() {
 	color = texture(gtexture, texcoord) * glcolor;
 	if (color.a < alphaTestRef) discard;
 
-	color *= texture(lightmap, lmcoord);
+	lightmapData = vec4(0, 0, 1, 1);
 	specularData = texture(specular, texcoord);
-	lightmapData = vec4(lmcoord, 0, 1);
-	encodedNormal = vec4(normal * 0.5 + 0.5, 1);
+	encodedNormal = vec4(normal * 0.5 + 0.5, 1.0);
 }

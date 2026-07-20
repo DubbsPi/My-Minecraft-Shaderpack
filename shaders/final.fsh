@@ -4,6 +4,8 @@
 
 
 uniform sampler2D colortex0;
+uniform sampler2D colortex7;
+
 uniform sampler2D noisetex;
 
 uniform float viewWidth;
@@ -34,7 +36,7 @@ void main() {
     if (lumaRange < max(EDGE_THRESHOLD_MIN, lumaMax * EDGE_THRESHOLD_MAX)){
         // Dithering
         vec3 noise = texture(noisetex, texcoord * vec2(135.126, 290.297) + vec2(628.672, 338.945) * frameTimeCounter).rgb;
-        gl_FragColor = vec4(pow(colorCenter, vec3(0.454545454545)) + (noise - 0.5) * 0.006, 1);
+        gl_FragColor = vec4(pow(colorCenter + texture(colortex7, texcoord).rgb, vec3(0.454545454545)) + (noise - 0.5) * 0.006, 1);
         return;
     }
     
@@ -161,5 +163,6 @@ void main() {
     #endif
     // Dithering
     vec3 noise = texture(noisetex, texcoord * vec2(135.126, 290.297) + vec2(628.672, 338.945) * frameTimeCounter).rgb;
-    gl_FragColor = vec4(pow(texture(colortex0, finalUv).rgb, vec3(0.454545454545)) + (noise - 0.5) * 0.006, 1);
+    vec4 finalColor = texture(colortex0, finalUv) + texture(colortex7, finalUv);
+    gl_FragColor = vec4(pow(finalColor.rgb, vec3(0.454545454545)) + (noise - 0.5) * 0.006, 1);
 }

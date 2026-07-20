@@ -13,12 +13,18 @@ out vec3 normal;
 
 
 layout(std430, binding = 2) buffer Vertices {
-    BlockVertex data[];
+    Vertex data[];
 } verts;
 layout(std430, binding = 3) buffer TerrainBuffer {
     uint triCount;
     uint vertexCount;
-} blocks;
+};
+
+
+uint fastMod3(uint x) {
+    uint div3 = (x * 0xAAABu) >> 17; 
+    return x - (div3 * 3u);
+}
 
 
 void main() {
@@ -31,9 +37,9 @@ void main() {
     vec3 blockViewPos = (gl_ModelViewMatrix * gl_Vertex).xyz;
     vec3 feetPlayerPos = (gbufferModelViewInverse * vec4(blockViewPos, 1)).xyz;
     
-    uint vertexIndex = atomicAdd(blocks.vertexCount, 1u);
-    verts.data[vertexIndex] = BlockVertex(feetPlayerPos, texcoord, glcolor);
-    if ((vertexIndex & 3u) == 2u) atomicAdd(blocks.triCount, 2u);
+    uint vertexIndex = atomicAdd(vertexCount, 1u);
+    verts.data[vertexIndex] = Vertex(feetPlayerPos, texcoord, glcolor, -1);
+    if (fastMod3(vertexIndex) == 2u) atomicAdd(triCount, 2u);
 
     gl_Position = ftransform();
 }
