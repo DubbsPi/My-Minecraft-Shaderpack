@@ -598,7 +598,7 @@ void main() {
         float dielectric = isMetal ? 0.04 : f0 * 0.25444444444;
 
         vec3 specularColor = isMetal ? color.rgb : vec3(dielectric);
-
+        
         #if defined(SSR) || defined(WSR)
         if (max(specularColor.r, max(specularColor.g, specularColor.b)) > 0.01) {            
             #ifdef SSR
